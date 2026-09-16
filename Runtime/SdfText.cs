@@ -451,8 +451,10 @@ namespace SDFUI
             if (!instance || instance.shader != source.shader)
             {
                 Release(instance);
-                instance = new Material(source) { name = "SDF Text Face", hideFlags = HideFlags.HideAndDontSave };
+                instance = new Material(source) { name = "SDF Text Face", hideFlags = HideFlags.HideAndDontSave | HideFlags.HideInInspector };
             }
+            // Also cover a render copy retained by Editor hot reload from an older version.
+            if ((instance.hideFlags & HideFlags.HideInInspector) == 0) instance.hideFlags |= HideFlags.HideInInspector;
             CopyRenderProperties(source, instance, stencil);
             instance.SetFloat("_OutlineWidth", 0);
             instance.SetFloat("_OutlineSoftness", 0);

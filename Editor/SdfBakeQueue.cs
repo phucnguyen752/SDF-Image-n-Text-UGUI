@@ -35,6 +35,7 @@ namespace SDFUI.Editor
             public string path, fingerprint, directory;
             public Texture2D source;
             public bool sRGB, reading, committing, reloadLocked;
+            public TextureResizeAlgorithm resizeAlgorithm;
             public RenderTexture readbackTexture;
             public readonly CancellationTokenSource cancellation = new CancellationTokenSource();
             public readonly List<SpriteWork> sprites = new List<SpriteWork>();
@@ -174,6 +175,8 @@ namespace SDFUI.Editor
             if (!importer || !active.source || importer.textureType != TextureImporterType.Sprite)
                 throw new InvalidOperationException("Select a Sprite imported from a source image.");
             active.sRGB = importer.sRGBTexture;
+            var platform = settings.ResolveTexturePlatform(EditorUserBuildSettings.activeBuildTarget);
+            active.resizeAlgorithm = platform.resizeAlgorithm;
             var identities = new HashSet<string>();
             long totalPixels = 0;
             bool needsPublish = false;
@@ -188,7 +191,7 @@ namespace SDFUI.Editor
                     throw new InvalidOperationException("A Sprite rectangle cannot be mapped to its original imported texture.");
                 string key = SdfBakeCache.SpriteKey(source);
                 if (!identities.Add(key)) throw new InvalidOperationException("The source contains duplicate Sprite IDs.");
-                float scale = Mathf.Min(1f, settings.maxSize / Mathf.Max(rect.width, rect.height));
+                float scale = Mathf.Min(1f, platform.maxTextureSize / Mathf.Max(rect.width, rect.height));
                 int width = Mathf.Max(1, Mathf.RoundToInt(rect.width * scale));
                 int height = Mathf.Max(1, Mathf.RoundToInt(rect.height * scale));
                 totalPixels += (long)(width + settings.padding * 2) * (height + settings.padding * 2);
@@ -247,9 +250,7 @@ namespace SDFUI.Editor
             try
             {
                 GL.sRGBWrite = work.sRGB && QualitySettings.activeColorSpace == ColorSpace.Linear;
-                Graphics.Blit(work.source, work.readbackTexture,
-                    new Vector2(sprite.rect.width / work.source.width, sprite.rect.height / work.source.height),
-                    new Vector2(sprite.rect.x / work.source.width, sprite.rect.y / work.source.height));
+                SdfTextureResize.Blit(work.source, sprite.rect, work.readbackTexture, work.resizeAlgorithm, work.sRGB);
                 EditorApplication.LockReloadAssemblies();
                 work.reloadLocked = true;
                 work.reading = true;

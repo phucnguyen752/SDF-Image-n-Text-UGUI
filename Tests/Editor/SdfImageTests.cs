@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
@@ -278,6 +279,89 @@ namespace SDFUI.Tests
             Assert.That(!firstMaterial, Is.True, "Disabled image should release its material in Edit Mode.");
             Assert.That((bool)secondMaterial, Is.True);
             Assert.That(second.materialForRendering.GetVector("_Outline").x, Is.EqualTo(11));
+        }
+
+        [Test]
+        public void Layers_MigrateOldFieldsAndKeepCompatibilityRolesAfterReorderUndoAndSerialization()
+        {
+            SdfImage image = CreateImage("Layer migration");
+            var serialized = new SerializedObject(image);
+            serialized.FindProperty("sdfLayersMigrated").boolValue = false;
+            serialized.FindProperty("sdfLayers").ClearArray();
+            serialized.FindProperty("outlineWidth").floatValue = 7;
+            serialized.FindProperty("outlineColor").colorValue = Color.magenta;
+            serialized.FindProperty("outlineUseTextureColor").boolValue = true;
+            serialized.FindProperty("outlineTextureColorIntensity").floatValue = 0.5f;
+            serialized.FindProperty("shadowOffset").vector2Value = new Vector2(11, -5);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            image.RefreshEffects();
+            Assert.That(image.Layers.Count, Is.EqualTo(2));
+            Assert.That(image.Layers[0].Width, Is.EqualTo(7));
+            Assert.That(image.Layers[0].UseTextureColor, Is.True);
+            Assert.That(image.Layers[0].TextureColorIntensity, Is.EqualTo(0.5f));
+            Assert.That(image.Layers[1].Position, Is.EqualTo(SdfOutlinePosition.Underlay));
+            Assert.That(image.Layers[1].Offset, Is.EqualTo(new Vector2(11, -5)));
+
+            Undo.IncrementCurrentGroup();
+            serialized.Update();
+            serialized.FindProperty("sdfLayers").MoveArrayElement(0, 1);
+            serialized.ApplyModifiedProperties();
+            Undo.FlushUndoRecordObjects();
+            Assert.That(image.Layers[0].Position, Is.EqualTo(SdfOutlinePosition.Underlay));
+            Undo.PerformUndo();
+            Assert.That(image.Layers[0].Position, Is.EqualTo(SdfOutlinePosition.Outer));
+            Undo.PerformRedo();
+            image.OutlineWidth = 9;
+            Assert.That(image.Layers[1].Width, Is.EqualTo(9), "The scalar API must follow the migrated outline after reordering.");
+            Assert.That(image.Layers[0].Width, Is.Zero);
+
+            // A legacy prefab override/animation channel must update only that channel.
+            serialized.Update();
+            serialized.FindProperty("outlineSoftness").floatValue = 3;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            image.RefreshEffects();
+            Assert.That(image.Layers[1].Width, Is.EqualTo(9));
+            Assert.That(image.Layers[1].Softness, Is.EqualTo(3));
+            var copy = CreateImage("Layer copy");
+            EditorJsonUtility.FromJsonOverwrite(EditorJsonUtility.ToJson(image), copy);
+            copy.RefreshEffects();
+            Assert.That(copy.Layers[1].Width, Is.EqualTo(9));
+            Assert.That(copy.Layers[1].Color, Is.EqualTo(Color.magenta));
+            image.Layers.Clear();
+            image.RefreshEffects();
+            image.enabled = false;
+            image.enabled = true;
+            Assert.That(image.Layers, Is.Empty, "An intentionally empty list must remain empty.");
+            Undo.ClearUndo(image);
+        }
+
+        [Test]
+        public void Layers_ExpandOneQuadForOffsetsAndClearUniformsWhenDisabled()
+        {
+            SdfImage image = CreateImage("Layer bounds");
+            image.rectTransform.sizeDelta = new Vector2(64, 64);
+            image.Layers.Clear();
+            image.Layers.Add(new SdfImageEffect { Width = 5, Offset = new Vector2(60, -40) });
+            image.Layers.Add(new SdfImageEffect { Width = 8, Offset = new Vector2(-30, 20), Color = Color.red });
+            image.RefreshEffects();
+            var mesh = BuildMesh(image);
+            try
+            {
+                Assert.That(mesh.vertexCount, Is.EqualTo(4), "Additional layers must not add overlapping geometry or child Graphics.");
+                Assert.That(mesh.bounds.max.x, Is.GreaterThanOrEqualTo(97));
+                Assert.That(mesh.bounds.min.y, Is.LessThanOrEqualTo(-77));
+                Assert.That(image.materialForRendering.GetInt("_LayerCount"), Is.EqualTo(2));
+                Assert.That(image.transform.childCount, Is.Zero);
+                image.EffectsEnabled = false;
+                Assert.That(image.materialForRendering.GetInt("_LayerCount"), Is.Zero);
+                image.EffectsEnabled = true;
+                Assert.That(image.materialForRendering.GetInt("_LayerCount"), Is.EqualTo(2));
+                image.Layers.RemoveAt(0);
+                image.RefreshEffects();
+                Assert.That(image.materialForRendering.GetInt("_LayerCount"), Is.EqualTo(1));
+                Assert.That(image.materialForRendering.GetVectorArray("_LayerSizes")[0].x, Is.EqualTo(-30));
+            }
+            finally { Object.DestroyImmediate(mesh); }
         }
 
         [Test]

@@ -23,6 +23,65 @@ namespace SDFUI.Tests
         private UnityEditor.Editor inspector;
         private int completedCount;
 
+        [Test]
+        public void SourceInspector_KeepsUnityTextureImporterAndInstallsSdfSectionOnce()
+        {
+            var sourceImporter = AssetImporter.GetAtPath(sourcePath);
+            inspector = UnityEditor.Editor.CreateEditor(sourceImporter);
+            Assert.That(inspector.GetType().FullName, Is.EqualTo("UnityEditor.TextureImporterInspector"));
+            var header = typeof(SdfSpriteEditor).Assembly.GetType("SDFUI.Editor.SdfTextureHeader", true);
+            var install = header.GetMethod("TryInstallSourceSection", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(install.Invoke(null, new object[] { inspector }), Is.True,
+                "The supported Editor must insert SDF into the native body rather than the preview header.");
+            var sections = (IDictionary)inspector.GetType().GetField("m_GUIElementMethods", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(inspector);
+            object spriteKey = null;
+            foreach (DictionaryEntry entry in sections)
+                if (entry.Key.ToString() == "Sprite") { spriteKey = entry.Key; break; }
+            var first = (Delegate)sections[spriteKey];
+            Assert.That(first.Target.GetType().DeclaringType, Is.EqualTo(header));
+            Assert.That(install.Invoke(null, new object[] { inspector }), Is.True);
+            Assert.That(sections[spriteKey], Is.SameAs(first), "Repainting must not wrap the Sprite section again.");
+        }
+
+        [Test]
+        public void PlatformTabs_UseUnityNativeTextureImporterUI()
+        {
+            // A compile-only check cannot detect a renamed internal Unity UI entry point.
+            var type = typeof(SdfSpriteEditor).Assembly.GetType("SDFUI.Editor.SdfPlatformSettingsGUI", true);
+            object platformUI = Activator.CreateInstance(type);
+            var native = type.GetProperty("UsesNativeTabs", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(native.GetValue(platformUI), Is.True,
+                "Supported Unity versions should use the original texture-importer tabs, not the compatibility fallback.");
+        }
+
+        [Test]
+        public void CompressionInspector_UsesDetachedNativeModelsWithoutEditingTheSource()
+        {
+            var importer = (TextureImporter)AssetImporter.GetAtPath(sourcePath);
+            string before = EditorJsonUtility.ToJson(importer);
+            var type = typeof(SdfSpriteEditor).Assembly.GetType("SDFUI.Editor.SdfPlatformSettingsGUI", true);
+            var ui = (IDisposable)Activator.CreateInstance(type, new object[] { importer });
+            try
+            {
+                Assert.That(type.GetProperty("UsesNativeSettings", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(ui), Is.True);
+                var models = (IList)type.GetField("platforms", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(ui);
+                Assert.That(models.Count, Is.GreaterThan(1));
+                foreach (var platform in models)
+                {
+                    var model = platform.GetType().GetProperty("model").GetValue(platform);
+                    var nativeSettings = (TextureImporterPlatformSettings)model.GetType().GetProperty("platformTextureSettings").GetValue(model);
+                    nativeSettings.overridden = true;
+                    nativeSettings.maxTextureSize = 128;
+                    nativeSettings.format = TextureImporterFormat.DXT5Crunched;
+                    nativeSettings.compressionQuality = 73;
+                    Assert.That(model.GetType().GetProperty("platformTextureSettingsProp").GetValue(model), Is.Null,
+                        "Native compression controls must be detached from the source SerializedObject.");
+                }
+            }
+            finally { ui.Dispose(); }
+            Assert.That(EditorJsonUtility.ToJson(importer), Is.EqualTo(before));
+        }
+
         [SetUp]
         public void SetUp()
         {
@@ -119,6 +178,18 @@ namespace SDFUI.Tests
             Assert.That(component.GetComponent<SdfAutoBake>(), Is.Null);
             Assert.That(component.GetComponents<MonoBehaviour>().Length, Is.EqualTo(1));
             Assert.That(Directory.GetFiles(folder, "*.asset"), Is.Empty);
+            Object.DestroyImmediate(inspector);
+            inspector = UnityEditor.Editor.CreateEditor(component.SdfData);
+            Assert.That(inspector, Is.TypeOf<SdfSpriteEditor>());
+            Assert.That(inspector.HasPreviewGUI(), Is.True);
+            Texture2D preview = inspector.RenderStaticPreview(sourcePath, AssetDatabase.LoadAllAssetsAtPath(sourcePath), 96, 96);
+            try
+            {
+                Assert.That(preview, Is.Not.Null, "The selectable SDF subasset must have a Project thumbnail.");
+                Assert.That(preview.width, Is.EqualTo(96));
+                Assert.That(preview.GetPixel(48, 48).a, Is.GreaterThan(0.9f));
+            }
+            finally { if (preview) Object.DestroyImmediate(preview); }
         }
 
         [UnityTest]

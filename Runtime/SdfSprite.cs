@@ -12,6 +12,7 @@ namespace SDFUI
 #endif
         [SerializeField] private Texture2D colorTexture;
         [SerializeField] private Texture2D distanceTexture;
+        [SerializeField] private bool normalizedDistance;
         [SerializeField] private Vector2Int sourceSize;
         [SerializeField] private Vector2 nativeSize;
         [SerializeField] private Vector4 border;
@@ -48,6 +49,9 @@ namespace SDFUI
         }
         public Texture2D ColorTexture => colorTexture;
         public Texture2D DistanceTexture => distanceTexture;
+        public bool NormalizedDistance => normalizedDistance;
+        /// <summary>Converts a distance texture sample into signed source pixels, including older RHalf bakes.</summary>
+        public Vector2 DistanceDecode => normalizedDistance ? new Vector2(2 * distanceRange, -distanceRange) : new Vector2(1, 0);
         public Vector2Int SourceSize => sourceSize;
         /// <summary>Original sprite size in sprite units, before applying Canvas reference pixels per unit.</summary>
         public Vector2 NativeSize => nativeSize.x > 0 && nativeSize.y > 0
@@ -76,22 +80,34 @@ namespace SDFUI
             return null;
         }
 
-        public bool IsValid => colorTexture && distanceTexture && sourceSize.x > 0 && sourceSize.y > 0
-            && padding >= 0 && distanceRange > 0 && !float.IsInfinity(distanceRange)
-            && pixelsPerUnit > 0 && !float.IsInfinity(pixelsPerUnit)
-            && colorTexture.width == sourceSize.x + padding * 2
-            && colorTexture.height == sourceSize.y + padding * 2
-            && distanceTexture.width == colorTexture.width && distanceTexture.height == colorTexture.height;
+        public bool IsValid
+        {
+            get
+            {
+                if (!colorTexture || !distanceTexture || sourceSize.x <= 0 || sourceSize.y <= 0
+                    || padding < 0 || !(distanceRange > 0) || float.IsInfinity(distanceRange)
+                    || !(pixelsPerUnit > 0) || float.IsInfinity(pixelsPerUnit)) return false;
+                int width = sourceSize.x + padding * 2, height = sourceSize.y + padding * 2;
+                int square = Mathf.Max(16, Mathf.NextPowerOfTwo(Mathf.Max(width, height)));
+                return distanceTexture.width == (normalizedDistance ? Mathf.NextPowerOfTwo(width) : width)
+                    && distanceTexture.height == (normalizedDistance ? Mathf.NextPowerOfTwo(height) : height)
+                    // Each texture has independent storage padding, without changing the sprite's domain.
+                    && colorTexture.width >= width && colorTexture.height >= height
+                    && colorTexture.width <= Mathf.Max(width + 11, square)
+                    && colorTexture.height <= Mathf.Max(height + 11, square);
+            }
+        }
 
 #if UNITY_EDITOR
         public void Initialize(Sprite source, Texture2D color, Texture2D distance, Vector2Int size,
             Vector4 sourceBorder, Vector2 normalizedPivot, float ppu, int texturePadding, float range,
-            float threshold = 0.5f, string fingerprint = "")
+            float threshold = 0.5f, string fingerprint = "", bool normalized = false)
         {
             sourceSprite = source;
             bakeFingerprint = fingerprint;
             colorTexture = color;
             distanceTexture = distance;
+            normalizedDistance = normalized;
             sourceSize = size;
             nativeSize = source ? source.rect.size / source.pixelsPerUnit : (Vector2)size / ppu;
             border = sourceBorder;

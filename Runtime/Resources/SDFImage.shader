@@ -4,6 +4,8 @@ Shader "UI/SDF Image"
     {
         [PerRendererData] _MainTex ("Sprite", 2D) = "white" {}
         _SdfTex ("Signed Distance (Source Pixels)", 2D) = "black" {}
+        _SdfDecode ("Distance Decode Scale, Offset", Vector) = (1,0,0,0)
+        [HideInInspector] _LayerCount ("Effect Layers", Float) = 0
         _Color ("Tint", Color) = (1,1,1,1)
         _HasSprite ("Valid Sprite", Float) = 0
         _SourceSize ("Source Size, Padding, Range", Vector) = (1,1,0,1)
@@ -70,7 +72,11 @@ Shader "UI/SDF Image"
             };
 
             sampler2D _MainTex;
+            float4 _MainTex_TexelSize;
             sampler2D _SdfTex;
+            float4 _SdfTex_TexelSize, _SdfDecode;
+            int _LayerCount;
+            float4 _LayerSizes[16], _LayerColors[16], _LayerModes[16];
             float4 _SourceSize, _ImageRect, _SourceBorder, _LocalBorder, _Outline, _OutlineTextureColor, _Shadow;
             fixed4 _Color, _OutlineColor, _ShadowColor;
             float4 _ClipRect;
@@ -117,7 +123,7 @@ Shader "UI/SDF Image"
 
             float2 TextureUV(float2 source)
             {
-                return (source + _SourceSize.z) / (_SourceSize.xy + 2 * _SourceSize.z);
+                return (source + _SourceSize.z) * _SdfTex_TexelSize.xy;
             }
 
             float Domain(float2 source)
@@ -152,47 +158,57 @@ Shader "UI/SDF Image"
             float4 frag(v2f i) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
-                float4 mapping = SourcePoint(i.localPosition);
-                float2 source = mapping.xy;
-                float2 uv = TextureUV(source);
-                float rawDistance = tex2D(_SdfTex, uv).r;
-                float2 sdf = LocalDistance(rawDistance, i.localPosition, mapping.zw);
+                float2 source = SourcePoint(i.localPosition).xy;
                 float domain = Domain(source) * _HasSprite;
-                fixed4 fill = tex2D(_MainTex, uv);
-                // The bake dilates source RGB into transparent padding. Reuse this untinted
-                // sample before premultiplication; outline alpha still comes from Outline Color.
-                float3 outlineRgb = _OutlineTextureColor.x > 0.5
-                    ? fill.rgb * _OutlineTextureColor.y : _OutlineColor.rgb;
+                fixed4 fill = tex2D(_MainTex, (source + _SourceSize.z) * _MainTex_TexelSize.xy);
                 fill.rgb *= i.color.rgb;
                 fill.a *= domain;
                 fill.rgb *= fill.a;
-
-                float outerWidth = _Outline.z < 0.5 ? _Outline.x : (_Outline.z > 1.5 ? _Outline.x * 0.5 : 0);
-                float innerWidth = _Outline.z > 1.5 ? _Outline.x * 0.5 : (_Outline.z > 0.5 ? _Outline.x : 0);
-                float contour = Coverage(sdf.x, sdf.y, _Outline.y);
-                float expanded = Coverage(sdf.x + outerWidth, sdf.y, _Outline.y);
-                float outerCoverage = saturate((expanded - contour) / max(1 - contour, 0.0001));
-                float innerRing = saturate(contour - Coverage(sdf.x - innerWidth, sdf.y, _Outline.y));
-                // The binary SDF can be fully inside while the source's filtered edge is still translucent.
-                // Let the outline cover that join across a two-texel filtering footprint, while preserving
-                // authored transparency farther inside. No extra texture samples or rebake are needed.
-                // Measure this footprint in source pixels so stretching one axis cannot fill distant transparency.
-                float joinRadius = max(2.0, 0.5 * fwidth(rawDistance));
-                float joinContour = min(contour, Coverage(rawDistance, joinRadius, 0));
-                float joinedCoverage = saturate((expanded - joinContour) / max(1 - joinContour, 0.0001));
-                outerCoverage = lerp(outerCoverage, joinedCoverage, saturate(outerWidth / max(sdf.y, 0.001)));
-                float outerAlpha = (1 - fill.a) * outerCoverage * domain * _OutlineColor.a;
-                float innerAlpha = min(innerRing * domain, fill.a) * _OutlineColor.a;
-                float4 foreground = float4(outlineRgb * (outerAlpha + innerAlpha)
-                    + fill.rgb * (1 - innerAlpha / max(fill.a, 0.0001)), fill.a + outerAlpha);
-
-                // Shift in local units BEFORE remapping; simply offsetting UVs would distort sliced shadows.
-                float4 shadowMapping = SourcePoint(i.localPosition - _Shadow.xy);
-                float2 shadowSource = shadowMapping.xy;
-                float shadowRaw = tex2D(_SdfTex, TextureUV(shadowSource)).r;
-                float2 shadowSdf = LocalDistance(shadowRaw, i.localPosition, shadowMapping.zw);
-                float shadowAlpha = Coverage(shadowSdf.x + _Shadow.w, shadowSdf.y, _Shadow.z) * _ShadowColor.a * Domain(shadowSource) * _HasSprite;
-                float4 result = foreground + fixed4(_ShadowColor.rgb * shadowAlpha, shadowAlpha) * (1 - foreground.a);
+                float4 behind = 0;
+                float4 inside = 0;
+                // Front to back, then composite the sprite and fade once. One quad/draw regardless of layer count.
+                [loop] for (int layer = 0; layer < _LayerCount; layer++)
+                {
+                    float4 style = _LayerSizes[layer]; // offset x/y, spread, softness
+                    float4 mode = _LayerModes[layer]; // position, texture color, intensity
+                    float4 tint = _LayerColors[layer];
+                    // Offset before the piecewise source mapping so sliced borders move as a whole.
+                    float4 mapping = SourcePoint(i.localPosition - style.xy);
+                    float2 layerSource = mapping.xy;
+                    float raw = tex2D(_SdfTex, TextureUV(layerSource)).r * _SdfDecode.x + _SdfDecode.y;
+                    float2 sdf = LocalDistance(raw, i.localPosition, mapping.zw);
+                    float layerDomain = Domain(layerSource) * _HasSprite;
+                    float3 rgb = tint.rgb;
+                    [branch] if (mode.y > 0.5)
+                        rgb = tex2D(_MainTex, (layerSource + _SourceSize.z) * _MainTex_TexelSize.xy).rgb * mode.z;
+                    float outerCoverage, innerCoverage = 0;
+                    if (mode.x > 2.5)
+                    {
+                        // Underlay fills the shifted silhouette: spread, softness and color also describe a shadow/glow.
+                        outerCoverage = Coverage(sdf.x + style.z, sdf.y, style.w);
+                    }
+                    else
+                    {
+                        float outerWidth = mode.x < 0.5 ? style.z : (mode.x > 1.5 ? style.z * 0.5 : 0);
+                        float innerWidth = mode.x > 1.5 ? style.z * 0.5 : (mode.x > 0.5 ? style.z : 0);
+                        float contour = Coverage(sdf.x, sdf.y, style.w);
+                        float expanded = Coverage(sdf.x + outerWidth, sdf.y, style.w);
+                        outerCoverage = saturate((expanded - contour) / max(1 - contour, 0.0001));
+                        float ring = saturate(contour - Coverage(sdf.x - innerWidth, sdf.y, style.w));
+                        innerCoverage = min(ring * layerDomain, fill.a) / max(fill.a, 0.0001);
+                        // Close the join across filtered source edges without filling translucent interiors.
+                        float joinRadius = max(2.0, 0.5 * fwidth(raw));
+                        float joinContour = min(contour, Coverage(raw, joinRadius, 0));
+                        float joined = saturate((expanded - joinContour) / max(1 - joinContour, 0.0001));
+                        outerCoverage = lerp(outerCoverage, joined, saturate(outerWidth / max(sdf.y, 0.001)));
+                    }
+                    float outerAlpha = outerCoverage * layerDomain * tint.a;
+                    float innerAlpha = innerCoverage * tint.a;
+                    behind += float4(rgb * outerAlpha, outerAlpha) * (1 - behind.a);
+                    inside += float4(rgb * innerAlpha, innerAlpha) * (1 - inside.a);
+                }
+                float4 foreground = float4(inside.rgb * fill.a + fill.rgb * (1 - inside.a), fill.a);
+                float4 result = foreground + behind * (1 - foreground.a);
                 // Vertex/CanvasGroup alpha fades the composite exactly once.
                 result *= i.color.a;
                 #ifdef UNITY_UI_CLIP_RECT
