@@ -5,29 +5,29 @@ using UnityEngine.Serialization;
 namespace SDFUI
 {
     public enum SdfImageType { Simple, Sliced }
-    public enum SdfOutlinePosition { Outer, Inner, Center }
+    public enum SdfOutlinePosition { Outer, Inner, Center, Underlay }
 
     /// <summary>uGUI image with a baked SDF outline and shadow. Effect sizes use Canvas local units.</summary>
     [AddComponentMenu("UI/SDF Image")]
     [RequireComponent(typeof(CanvasRenderer))]
-    public sealed class SdfImage : UnityEngine.UI.Image
+    public sealed partial class SdfImage : UnityEngine.UI.Image
     {
         [SerializeField, HideInInspector, FormerlySerializedAs("sprite")] private SdfSprite bakedSprite;
         [SerializeField, HideInInspector, FormerlySerializedAs("imageType")] private SdfImageType legacyImageType;
         [SerializeField, HideInInspector, FormerlySerializedAs("preserveAspect")] private bool legacyPreserveAspect;
         [SerializeField, HideInInspector] private bool migratedImageSettings;
-        [SerializeField] private bool outlineEnabled = true;
-        [SerializeField] private bool shadowEnabled = true;
-        [SerializeField, Min(0)] private float outlineWidth = 2;
-        [SerializeField, Min(0)] private float outlineSoftness;
-        [SerializeField] private Color outlineColor = Color.black;
-        [SerializeField] private bool outlineUseTextureColor;
-        [SerializeField, Min(0)] private float outlineTextureColorIntensity = 1;
-        [SerializeField] private SdfOutlinePosition outlinePosition;
-        [SerializeField] private Color shadowColor = new Color(0, 0, 0, 0.3f);
-        [SerializeField] private Vector2 shadowOffset = new Vector2(2, -2);
-        [SerializeField, Min(0)] private float shadowBlur = 3;
-        [SerializeField] private float shadowSpread;
+        [SerializeField, HideInInspector] private bool outlineEnabled = true;
+        [SerializeField, HideInInspector] private bool shadowEnabled = true;
+        [SerializeField, HideInInspector, Min(0)] private float outlineWidth = 2;
+        [SerializeField, HideInInspector, Min(0)] private float outlineSoftness;
+        [SerializeField, HideInInspector] private Color outlineColor = Color.black;
+        [SerializeField, HideInInspector] private bool outlineUseTextureColor;
+        [SerializeField, HideInInspector, Min(0)] private float outlineTextureColorIntensity = 1;
+        [SerializeField, HideInInspector] private SdfOutlinePosition outlinePosition;
+        [SerializeField, HideInInspector] private Color shadowColor = new Color(0, 0, 0, 0.3f);
+        [SerializeField, HideInInspector] private Vector2 shadowOffset = new Vector2(2, -2);
+        [SerializeField, HideInInspector, Min(0)] private float shadowBlur = 3;
+        [SerializeField, HideInInspector] private float shadowSpread;
 
         private Material ownedMaterial;
         private static Shader sdfShader;
@@ -62,24 +62,11 @@ namespace SDFUI
         private SdfImageType ImageType => type == UnityEngine.UI.Image.Type.Sliced ? SdfImageType.Sliced : SdfImageType.Simple;
         public new SdfImageType Type { get => ImageType; set => type = value == SdfImageType.Sliced ? UnityEngine.UI.Image.Type.Sliced : UnityEngine.UI.Image.Type.Simple; }
         public bool PreserveAspect { get => preserveAspect; set => preserveAspect = value; }
-        public bool OutlineEnabled { get => outlineEnabled; set => Set(ref outlineEnabled, value); }
-        public bool ShadowEnabled { get => shadowEnabled; set => Set(ref shadowEnabled, value); }
-        public float OutlineWidth { get => outlineWidth; set => Set(ref outlineWidth, Positive(value)); }
-        public float OutlineSoftness { get => outlineSoftness; set => Set(ref outlineSoftness, Positive(value)); }
-        public Color OutlineColor { get => outlineColor; set => Set(ref outlineColor, SafeColor(value)); }
-        public bool OutlineUseTextureColor { get => outlineUseTextureColor; set => Set(ref outlineUseTextureColor, value); }
-        public float OutlineTextureColorIntensity { get => outlineTextureColorIntensity; set => Set(ref outlineTextureColorIntensity, Positive(value)); }
-        public SdfOutlinePosition OutlinePosition { get => outlinePosition; set => Set(ref outlinePosition, ValidPosition(value)); }
-        public Color ShadowColor { get => shadowColor; set => Set(ref shadowColor, SafeColor(value)); }
-        public Vector2 ShadowOffset { get => shadowOffset; set => Set(ref shadowOffset, new Vector2(Finite(value.x), Finite(value.y))); }
-        public float ShadowBlur { get => shadowBlur; set => Set(ref shadowBlur, Positive(value)); }
-        public float ShadowSpread { get => shadowSpread; set => Set(ref shadowSpread, Finite(value)); }
-
         public override Texture mainTexture { get { ResolveSource(false); return UsesSdf ? bakedSprite.ColorTexture : base.mainTexture; } }
         private bool HasSprite => bakedSprite && bakedSprite.IsValid;
         private bool UsesSdf => HasSprite
             && (type == UnityEngine.UI.Image.Type.Simple || (type == UnityEngine.UI.Image.Type.Sliced && fillCenter))
-            && (outlineEnabled || shadowEnabled || !SourceSprite);
+            && (HasEnabledLayers || !SourceSprite);
 
         public void RefreshSdf()
         {
@@ -170,13 +157,6 @@ namespace SDFUI
             }
         }
 
-        private void Set<T>(ref T field, T value)
-        {
-            if (EqualityComparer<T>.Default.Equals(field, value)) return;
-            field = value;
-            SetAllDirty();
-        }
-
         private Material GetSdfMaterial()
         {
             if (ownedMaterial)
@@ -256,7 +236,9 @@ namespace SDFUI
             suppressResolve = true;
             base.OnValidate();
             suppressResolve = false;
-            ChangedEditor?.Invoke(this);
+            // Inspector effect/tint edits only dirty rendering. Defer attachment resolution
+            // to the Editor service only when the serialized source actually changed.
+            if (!sourceResolved || SourceSprite != resolvedSource) ChangedEditor?.Invoke(this);
         }
 #endif
 
@@ -271,12 +253,14 @@ namespace SDFUI
             shadowBlur = Positive(shadowBlur);
             shadowSpread = Finite(shadowSpread);
             outlinePosition = ValidPosition(outlinePosition);
+            MigrateLayers();
+            foreach (var layer in sdfLayers) layer?.Sanitize();
         }
 
         private static float Finite(float value) => float.IsNaN(value) || float.IsInfinity(value) ? 0 : Mathf.Clamp(value, -100000, 100000);
         private static float Positive(float value) => Mathf.Max(0, Finite(value));
         private static Color SafeColor(Color value) => new Color(Mathf.Clamp01(Finite(value.r)), Mathf.Clamp01(Finite(value.g)), Mathf.Clamp01(Finite(value.b)), Mathf.Clamp01(Finite(value.a)));
-        private static SdfOutlinePosition ValidPosition(SdfOutlinePosition value) => value == SdfOutlinePosition.Inner || value == SdfOutlinePosition.Center ? value : SdfOutlinePosition.Outer;
+        private static SdfOutlinePosition ValidPosition(SdfOutlinePosition value) => value >= SdfOutlinePosition.Outer && value <= SdfOutlinePosition.Underlay ? value : SdfOutlinePosition.Outer;
 
         private Vector2 NativeSize => HasSprite ? bakedSprite.NativeSize * (canvas ? canvas.referencePixelsPerUnit : 100) : Vector2.zero;
 
@@ -355,12 +339,12 @@ namespace SDFUI
 
         private Vector4 EffectSettings(Rect rect, Vector4 border)
         {
-            // Reserve two texels for filtering/antialiasing before the field saturates or hits its bounds.
-            var budget = Mathf.Max(0, Mathf.Min(bakedSprite.Padding, bakedSprite.DistanceRange) - 2) * MinimumScale(rect, border);
-            var width = outlineEnabled ? Mathf.Min(Positive(outlineWidth), budget) : 0;
-            var softness = outlineEnabled ? Mathf.Min(Positive(outlineSoftness), Mathf.Max(0, budget - width) * 2) : 0;
-            var spread = shadowEnabled ? Mathf.Clamp(Finite(shadowSpread), -budget, budget) : 0;
-            var blur = shadowEnabled ? Mathf.Min(Positive(shadowBlur), Mathf.Max(0, budget - Mathf.Abs(spread)) * 2) : 0;
+            // Keep released material properties available for tooling; rendering uses the layer arrays.
+            var budget = EffectBudget(rect, border);
+            var width = OutlineEnabled ? Mathf.Min(Positive(OutlineWidth), budget) : 0;
+            var softness = OutlineEnabled ? Mathf.Min(Positive(OutlineSoftness), Mathf.Max(0, budget - width) * 2) : 0;
+            var spread = ShadowEnabled ? Mathf.Clamp(Finite(ShadowSpread), -budget, budget) : 0;
+            var blur = ShadowEnabled ? Mathf.Min(Positive(ShadowBlur), Mathf.Max(0, budget - Mathf.Abs(spread)) * 2) : 0;
             return new Vector4(width, softness, blur, spread);
         }
 
@@ -368,17 +352,24 @@ namespace SDFUI
         {
             var rect = DrawingRect();
             if (!HasSprite || rect.width <= 0 || rect.height <= 0) return rect;
-            var settings = EffectSettings(rect, LocalBorder(rect));
-            var outer = outlinePosition == SdfOutlinePosition.Inner ? 0 : settings.x * (outlinePosition == SdfOutlinePosition.Center ? 0.5f : 1);
-            outer = outlineEnabled && outlineColor.a > 0 && settings.x > 0 ? outer + settings.y * 0.5f : 0;
-            var shadow = shadowEnabled && shadowColor.a > 0 ? Mathf.Max(0, settings.w) + settings.z * 0.5f : 0;
-            var offset = shadowEnabled && shadowColor.a > 0 ? shadowOffset : Vector2.zero;
-            return Rect.MinMaxRect(rect.xMin - Mathf.Max(outer, shadow - offset.x) - 1,
-                rect.yMin - Mathf.Max(outer, shadow - offset.y) - 1,
-                rect.xMax + Mathf.Max(outer, shadow + offset.x) + 1,
-                rect.yMax + Mathf.Max(outer, shadow + offset.y) + 1);
+            var min = rect.min;
+            var max = rect.max;
+            float budget = EffectBudget(rect, LocalBorder(rect));
+            var layers = Layers;
+            if (sdfEffectsEnabled)
+                for (int i = 0; i < Mathf.Min(layers.Count, MaxEffectLayers); i++)
+                {
+                    var layer = layers[i];
+                    if (layer == null || !layer.IsVisible) continue;
+                    Vector4 style = LayerSettings(layer, budget);
+                    float outer = layer.Position == SdfOutlinePosition.Inner ? 0
+                        : Mathf.Max(0, style.z) * (layer.Position == SdfOutlinePosition.Center ? 0.5f : 1) + style.w * 0.5f;
+                    Vector2 offset = new Vector2(style.x, style.y);
+                    min = Vector2.Min(min, rect.min + offset - Vector2.one * outer);
+                    max = Vector2.Max(max, rect.max + offset + Vector2.one * outer);
+                }
+            return Rect.MinMaxRect(min.x - 1, min.y - 1, max.x + 1, max.y + 1);
         }
-
         protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper vertices)
         {
             ResolveSource(false);
@@ -411,15 +402,18 @@ namespace SDFUI
             var settings = EffectSettings(rect, border);
             target.SetTexture("_MainTex", bakedSprite.ColorTexture);
             target.SetTexture("_SdfTex", bakedSprite.DistanceTexture);
+            Vector2 decode = bakedSprite.DistanceDecode;
+            target.SetVector("_SdfDecode", new Vector4(decode.x, decode.y, 0, 0));
             target.SetVector("_SourceSize", new Vector4(bakedSprite.SourceSize.x, bakedSprite.SourceSize.y, bakedSprite.Padding, bakedSprite.DistanceRange));
             target.SetVector("_ImageRect", new Vector4(rect.x, rect.y, Mathf.Max(0.0001f, rect.width), Mathf.Max(0.0001f, rect.height)));
             target.SetVector("_SourceBorder", ImageType == SdfImageType.Sliced ? bakedSprite.Border : Vector4.zero);
             target.SetVector("_LocalBorder", border);
-            target.SetVector("_Outline", new Vector4(settings.x, settings.y, (float)outlinePosition, 0));
-            target.SetColor("_OutlineColor", outlineEnabled ? outlineColor : Color.clear);
-            target.SetVector("_OutlineTextureColor", new Vector4(outlineUseTextureColor ? 1 : 0, outlineTextureColorIntensity, 0, 0));
-            target.SetColor("_ShadowColor", shadowEnabled ? shadowColor : Color.clear);
-            target.SetVector("_Shadow", new Vector4(shadowOffset.x, shadowOffset.y, settings.z, settings.w));
+            ApplyLayers(target, rect, border);
+            target.SetVector("_Outline", new Vector4(settings.x, settings.y, (float)OutlinePosition, 0));
+            target.SetColor("_OutlineColor", OutlineEnabled ? OutlineColor : Color.clear);
+            target.SetVector("_OutlineTextureColor", new Vector4(OutlineUseTextureColor ? 1 : 0, OutlineTextureColorIntensity, 0, 0));
+            target.SetColor("_ShadowColor", ShadowEnabled ? ShadowColor : Color.clear);
+            target.SetVector("_Shadow", new Vector4(ShadowOffset.x, ShadowOffset.y, settings.z, settings.w));
         }
 
         public override bool Raycast(Vector2 screenPoint, Camera eventCamera)

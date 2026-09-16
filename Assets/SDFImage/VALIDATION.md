@@ -1,5 +1,27 @@
 # Validation
 
+## 0.7.0 — image layers, compressed bakes and import controls (2026-09-16)
+
+Validated the package in an isolated local UPM fixture using Unity **6000.0.83f1**. The original development scene and unrelated project changes were excluded from the release.
+
+| Check | Result |
+| --- | --- |
+| Built-in pipeline, Gamma | **110 / 110 EditMode tests passed**, zero skipped, 29.751 s |
+| URP, Linear | **110 / 110 EditMode tests passed**, zero skipped, 29.903 s |
+| StandaloneWindows64 player script compilation | **Passed**, 18 runtime assemblies; no SDFUI Editor/test assemblies |
+| Android shader bundle, Vulkan and OpenGL ES 3 | **Passed**, strict shader bundle build |
+| Image Inspector | **Passed**, 15 automated draws covering single/multiple selection, narrow layouts, texture color and adding layers |
+
+The suite covers image layer ordering, offsets, independent texture color, 16 layers, one-time opacity fading, legacy field migration, reordered compatibility properties and cleared lists. Existing mask, nine-slice, native-size, source-swap and TextMeshPro checks remain enabled. Material-preset editing, Clear SDF, Undo/Redo, source identity preservation, compression formats and platform settings are also exercised.
+
+The Ready-status regression was reproduced before the fix: editing layers did not rebake or reimport, but the queue cycled through Queued and Ready. The corrected test keeps Ready stable through layer edits, Undo/Redo, enable and refresh. A second test confirms missing/stale bakes still regenerate. The component's Ready badge and SDF Settings foldout were subsequently removed; the Inspector draw and player compilation checks passed afterward.
+
+Distance compression preserves source geometry and effect padding, adding unused space to reach power-of-two dimensions. For the tested 400×400 star with 32-pixel padding, the distance payload decreased from **430,592 bytes (420.5 KiB)** in 464×464 RHalf to **131,072 bytes (128 KiB)** in 512×512 BC4/EAC R. These are texture payload sizes, not total Editor memory estimates. The uncompressed option restores RHalf storage. Separate Android-target validation passed 108 cases before the two queue regression cases were added.
+
+Reports: [Built-in Gamma](Documentation~/Tests-0.7.0-Builtin.xml), [URP Linear](Documentation~/Tests-0.7.0-URP-Linear.xml), [player assemblies](Documentation~/0.7.0-player-assemblies.txt). Android shader, image-layer renders and Inspector probe logs remain in the development project's ignored `Build/Validation` directory. Git can normalize report line endings without changing their content.
+
+No complete APK/iOS player build, mobile device run or mobile performance profile was performed. Automated Inspector draws and serialized edits do not establish mouse-driven interaction coverage.
+
 ## 0.6.0 — unified SDF Text layers (2026-09-16)
 
 Validated the unified Layers list, Linear color correction and antialiasing update in the isolated local UPM fixture with Unity **6000.0.83f1**.

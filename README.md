@@ -12,19 +12,21 @@ https://github.com/phucnguyen752/sdf-image.git#upm
 
 This URL follows the `upm` branch. After a new release, select **SDF Image** in Package Manager and click **Update**; keep the same URL. If you installed a version tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
 
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.6.0` instead. Updating a pinned tag does not switch to a newer release tag.
+To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.7.0` instead. Updating a pinned tag does not switch to a newer release tag.
 
 Requires Unity 6000.0 and uGUI 2.0.0. The version tag and `upm` branch contain the package at the repository root. The `main` branch contains the Unity development project, with the library in `Assets/SDFImage`.
 
 ## Use
 
-Create **GameObject → UI → SDF Image**, assign a source sprite, then select **Generate SDF** if needed. Enable **Outline** or **Shadow** to edit that effect. New images use one component derived from Unity Image.
+Create **GameObject → UI → SDF Image**, assign a source sprite, then select **Generate SDF** if needed. Edit **SDF Effects → Layers** for up to 16 outlines, shadows and glows with independent color, width, softness and offset. Drag layers to reorder them; the top layer is in front. Use **Underlay** for an offset shadow or glow. New images use one component derived from Unity Image, with all layers composed in one quad/material draw.
 
 ![SDF Outline overview: outer, inner and center outlines, shadow, glow, nine-slice and RectMask2D](Assets/SDFImage/Documentation~/sdf-outline-demo.png)
 
-Enable **Outline → Use Texture Color** to color the outline from the sprite texture. **Intensity** controls brightness (`0` black, `1` original, above `1` brighter), while **Opacity** controls transparency. Existing SDF sprites do not need rebaking.
+Enable **Use Texture Color** on a layer to color its effect from the sprite texture. **Intensity** controls brightness (`0` black, `1` original, above `1` brighter), while **Opacity** controls transparency. Editing effect layers does not rebake the sprite.
 
 ![Use Texture Color: gradient star, hollow ring and nine-sliced panel rendered in Unity URP](Assets/SDFImage/Documentation~/sdf-outline-texture-color-demo.png)
+
+Select the source texture and open **SDF → Open SDF Import Settings** to edit bake settings and Unity's native platform compression controls. Distance maps use a single compressed channel and are padded to power-of-two dimensions without shrinking the artwork. Disable **Compress Distance** to retain full-precision RHalf data. **Clear SDF** removes generated data while preserving the source sprite and saved settings.
 
 For text, create **GameObject → UI → SDF Text**, assign a TMP SDF font, and enable **Effects Enabled** below the standard TMP Inspector. `SdfText` derives from `TextMeshProUGUI` and draws all glyph effects behind the label's faces, so the outline of one character cannot cover its neighbour's face. Text remains editable at runtime and uses the existing font atlas; no sprite bake is needed. Font atlas padding limits effect spread and softness.
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using NUnit.Framework;
 using TMPro;
 using UnityEditor;
@@ -776,6 +777,67 @@ namespace SDFUI.Tests
             Assert.That(CountExteriorEffect(face, contracted),
                 Is.LessThan(CountExteriorEffect(face, normal) - 10),
                 "Negative spread must shrink the shadow, not clamp to zero.");
+        }
+
+        [Test]
+        public void Inspector_EditsTheSavedFontMaterialInsteadOfTheRenderClone()
+        {
+            string folder = CreateSerializationFolder();
+            var preset = new Material(font.material) { name = "Editable SDF Text Preset" };
+            string path = folder + "/Preset.mat";
+            AssetDatabase.CreateAsset(preset, path);
+            UnityEditor.Editor inspector = null, renderInspector = null;
+            try
+            {
+                SdfText text = CreateText(canvas.transform, "EDIT");
+                text.fontSharedMaterial = preset;
+                EnableEffects(text);
+                Render();
+                Material renderMaterial = text.canvasRenderer.GetMaterial();
+                Assert.That(renderMaterial, Is.Not.EqualTo(preset));
+                renderInspector = UnityEditor.Editor.CreateEditor(renderMaterial);
+                var hidden = typeof(EditorUtility).GetMethod("IsHiddenInInspector", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(UnityEditor.Editor) }, null);
+                Assert.That(hidden, Is.Not.Null);
+                Assert.That(hidden.Invoke(null, new object[] { renderInspector }), Is.True,
+                    "The temporary, read-only SDF Text Face material must not be presented as the editable font material.");
+
+                inspector = UnityEditor.Editor.CreateEditor(text);
+                var field = inspector.GetType().GetField("fontMaterialEditor", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(field, Is.Not.Null);
+                var materialEditor = (MaterialEditor)field.GetValue(inspector);
+                Assert.That(materialEditor.target, Is.EqualTo(preset));
+                Assert.That(materialEditor.target.hideFlags & HideFlags.NotEditable, Is.EqualTo(HideFlags.None));
+                Assert.That(AssetDatabase.GetAssetPath(materialEditor.target), Is.EqualTo(path));
+
+                Undo.IncrementCurrentGroup();
+                materialEditor.RegisterPropertyChangeUndo("Edit SDF Text Face");
+                preset.SetColor("_FaceColor", Color.green);
+                preset.SetFloat("_FaceDilate", 0.15f);
+                Undo.FlushUndoRecordObjects();
+                TMPro_EventManager.ON_MATERIAL_PROPERTY_CHANGED(true, preset);
+                Render();
+                Assert.That(text.canvasRenderer.GetMaterial().GetColor("_FaceColor"), Is.EqualTo(Color.green));
+                Assert.That(text.canvasRenderer.GetMaterial().GetFloat("_FaceDilate"), Is.EqualTo(0.15f).Within(0.000001f));
+                Assert.That(text.fontSharedMaterial, Is.EqualTo(preset));
+                Undo.PerformUndo();
+                Render();
+                Assert.That(preset.GetColor("_FaceColor"), Is.EqualTo(Color.white));
+                Assert.That(text.canvasRenderer.GetMaterial().GetColor("_FaceColor"), Is.EqualTo(Color.white));
+                Undo.PerformRedo();
+                EditorUtility.SetDirty(preset);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                Assert.That(AssetDatabase.LoadAssetAtPath<Material>(path).GetFloat("_FaceDilate"), Is.EqualTo(0.15f).Within(0.000001f));
+                Assert.That(AssetDatabase.LoadAssetAtPath<Material>(path).GetColor("_FaceColor"), Is.EqualTo(Color.green));
+            }
+            finally
+            {
+                if (inspector) Object.DestroyImmediate(inspector);
+                if (renderInspector) Object.DestroyImmediate(renderInspector);
+                Undo.ClearUndo(preset);
+                AssetDatabase.DeleteAsset(folder);
+            }
         }
 
         [Test]

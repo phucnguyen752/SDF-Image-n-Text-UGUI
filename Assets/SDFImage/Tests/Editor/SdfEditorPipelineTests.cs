@@ -61,6 +61,88 @@ namespace SDFUI.Tests
         }
 
         [Test]
+        public void LegacySettings_DefaultToAutomaticCompression_AndRoundTripOptOut()
+        {
+            SetUserData(Marker + "{\"enabled\":false,\"maxSize\":512,\"padding\":32,\"range\":32,\"alphaThreshold\":0.5}" + EndMarker);
+            var settings = SdfTextureSettings.Get(sourcePath);
+            Assert.That(settings.colorCompression, Is.EqualTo(SdfColorCompression.Automatic));
+            Assert.That(settings.compressDistance, Is.True, "Older metadata should receive the compressed-distance default.");
+            settings.colorCompression = SdfColorCompression.Uncompressed;
+            settings.compressDistance = false;
+            SdfTextureSettings.Set(sourcePath, settings);
+            Assert.That(SdfTextureSettings.Get(sourcePath).colorCompression, Is.EqualTo(SdfColorCompression.Uncompressed));
+            Assert.That(SdfTextureSettings.Get(sourcePath).compressDistance, Is.False);
+        }
+
+        [Test]
+        public void InactivePlatformOverrides_DoNotInvalidateTheCurrentBake()
+        {
+            var settings = SdfTextureSettings.Get(sourcePath);
+            SdfTextureSettings.Set(sourcePath, settings);
+            string before = SdfTextureSettings.Fingerprint(sourcePath);
+            SdfPlatformSettings inactive = EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android ? settings.ios : settings.android;
+            inactive.overridden = true;
+            inactive.maxSize = 64;
+            inactive.colorCompression = SdfColorCompression.Uncompressed;
+            inactive.compressionQuality = SdfCompressionQuality.Fast;
+            SdfTextureSettings.Set(sourcePath, settings);
+            Assert.That(SdfTextureSettings.Fingerprint(sourcePath), Is.EqualTo(before));
+            var stored = SdfTextureSettings.Get(sourcePath);
+            SdfPlatformSettings saved = EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android ? stored.ios : stored.android;
+            Assert.That(saved.overridden, Is.True);
+            Assert.That(saved.maxSize, Is.EqualTo(64));
+            Assert.That(saved.compressionQuality, Is.EqualTo(SdfCompressionQuality.Fast));
+        }
+
+        [Test]
+        public void PlatformSettings_SupportImporterUndoAndRedo()
+        {
+            var settings = SdfTextureSettings.Get(sourcePath);
+            SdfTextureSettings.Set(sourcePath, settings);
+            Undo.IncrementCurrentGroup();
+            settings.android.overridden = true;
+            settings.android.maxSize = 128;
+            settings.android.compressionQuality = SdfCompressionQuality.Fast;
+            SdfTextureSettings.Set(sourcePath, settings);
+            Undo.FlushUndoRecordObjects();
+            Undo.PerformUndo();
+            Assert.That(SdfTextureSettings.Get(sourcePath).android.overridden, Is.False);
+            Undo.PerformRedo();
+            var restored = SdfTextureSettings.Get(sourcePath).android;
+            Assert.That(restored.overridden, Is.True);
+            Assert.That(restored.maxSize, Is.EqualTo(128));
+            Assert.That(restored.compressionQuality, Is.EqualTo(SdfCompressionQuality.Fast));
+        }
+
+        [Test]
+        public void NativeTexturePlatforms_PreserveAllFieldsAndSupportUndoRedo()
+        {
+            var settings = SdfTextureSettings.Get(sourcePath);
+            SdfTextureSettings.Set(sourcePath, settings);
+            string before = SdfTextureSettings.Fingerprint(sourcePath);
+            Undo.IncrementCurrentGroup();
+            settings.texturePlatforms.Add(new TextureImporterPlatformSettings
+            {
+                name = "Android", overridden = true, maxTextureSize = 2048,
+                resizeAlgorithm = TextureResizeAlgorithm.Mitchell, format = TextureImporterFormat.ASTC_6x6,
+                textureCompression = TextureImporterCompression.CompressedLQ, compressionQuality = 73,
+                crunchedCompression = true, allowsAlphaSplitting = true,
+                androidETC2FallbackOverride = AndroidETC2FallbackOverride.Quality16Bit
+            });
+            SdfTextureSettings.Set(sourcePath, settings);
+            if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android)
+                Assert.That(SdfTextureSettings.Fingerprint(sourcePath), Is.EqualTo(before));
+            Assert.That(JsonUtility.ToJson(SdfTextureSettings.Get(sourcePath).texturePlatforms[0]),
+                Is.EqualTo(JsonUtility.ToJson(settings.texturePlatforms[0])));
+            Undo.FlushUndoRecordObjects();
+            Undo.PerformUndo();
+            Assert.That(SdfTextureSettings.Get(sourcePath).texturePlatforms, Is.Empty);
+            Undo.PerformRedo();
+            Assert.That(JsonUtility.ToJson(SdfTextureSettings.Get(sourcePath).texturePlatforms[0]),
+                Is.EqualTo(JsonUtility.ToJson(settings.texturePlatforms[0])));
+        }
+
+        [Test]
         public void Settings_LegacyJsonWithEscapedBraces_PreservesForeignPrefixAndSuffix()
         {
             const string prefix = "{\"otherImporter\":{\"value\":17}}";

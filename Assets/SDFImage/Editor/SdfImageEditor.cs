@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.UI;
+using UnityEditorInternal;
 using UnityEngine;
 using Image = UnityEngine.UI.Image;
 
@@ -9,16 +10,26 @@ namespace SDFUI.Editor
     [CustomEditor(typeof(SdfImage)), CanEditMultipleObjects]
     public sealed class SdfImageEditor : ImageEditor
     {
-        private static readonly int[] Sizes = { 64, 128, 256, 512, 1024 };
-        private static readonly string[] SizeLabels = { "64", "128", "256", "512", "1024" };
-        private SerializedProperty outlineEnabled, shadowEnabled;
-        private bool showBakeSettings;
+        private SerializedProperty effectsEnabled, layers, layerCount;
+        private ReorderableList layerList;
 
         protected override void OnEnable()
         {
             base.OnEnable();
-            outlineEnabled = serializedObject.FindProperty("outlineEnabled");
-            shadowEnabled = serializedObject.FindProperty("shadowEnabled");
+            foreach (SdfImage image in targets) _ = image.Layers;
+            serializedObject.Update();
+            effectsEnabled = serializedObject.FindProperty("sdfEffectsEnabled");
+            layers = serializedObject.FindProperty("sdfLayers");
+            layerCount = serializedObject.FindProperty("sdfLayers.Array.size");
+            layerList = new ReorderableList(serializedObject, layers, !serializedObject.isEditingMultipleObjects, true, true, true)
+            {
+                drawHeaderCallback = rect => EditorGUI.LabelField(rect, "Layers (top = front)"),
+                drawElementCallback = DrawLayer,
+                elementHeightCallback = LayerHeight,
+                onAddCallback = AddLayer,
+                onCanAddCallback = list => !layerCount.hasMultipleDifferentValues && list.count < SdfImage.MaxEffectLayers,
+                onCanRemoveCallback = list => !layerCount.hasMultipleDifferentValues && list.count > 0
+            };
         }
 
         public override void OnInspectorGUI()
@@ -38,7 +49,7 @@ namespace SDFUI.Editor
 
             if (hasSource)
             {
-                EditorGUILayout.Space(4);
+                if (busy || !ready) EditorGUILayout.Space(4);
                 if (busy)
                 {
                     using (new EditorGUILayout.HorizontalScope())
@@ -56,9 +67,6 @@ namespace SDFUI.Editor
                     if (!CanGenerate())
                         EditorGUILayout.HelpBox("Generation requires an imported Sprite inside Assets.", MessageType.Info);
                 }
-                else
-                    EditorGUILayout.LabelField("✓  SDF ready", EditorStyles.miniLabel);
-
                 foreach (SdfImage image in targets)
                 {
                     string error = SdfBakeQueue.GetStatus(AssetDatabase.GetAssetPath(image.SourceSprite));
@@ -78,54 +86,95 @@ namespace SDFUI.Editor
                         "Other modes render as a standard Unity Image.", MessageType.Info);
                 using (new EditorGUI.DisabledScope(!supported))
                 {
+                    EditorGUILayout.LabelField("SDF Effects", EditorStyles.boldLabel);
                     using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
-                        if (ToggleSection(outlineEnabled, "Outline"))
+                        if (ToggleSection(effectsEnabled, "Effects Enabled"))
                         {
-                            DrawOutlineColor();
-                            Field("outlineWidth", "Width");
-                            Field("outlinePosition", "Position");
-                            Field("outlineSoftness", "Softness");
-                        }
-                    }
-                    using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                    {
-                        if (ToggleSection(shadowEnabled, "Shadow"))
-                        {
-                            Field("shadowColor", "Color");
-                            Field("shadowOffset", "Offset");
-                            Field("shadowBlur", "Blur");
-                            Field("shadowSpread", "Spread");
+                            layerList.draggable = !serializedObject.isEditingMultipleObjects;
+                            layerList.DoLayoutList();
+                            if (layers.arraySize > SdfImage.MaxEffectLayers)
+                                EditorGUILayout.HelpBox("Only the first 16 layers are rendered.", MessageType.Warning);
+                            else if (layerCount.hasMultipleDifferentValues)
+                                EditorGUILayout.HelpBox("Selected images have different layer counts. Edit one image at a time to add, remove or reorder layers.", MessageType.Info);
+                            else if (serializedObject.isEditingMultipleObjects)
+                                EditorGUILayout.HelpBox("Select a single image to reorder layers.", MessageType.None);
                         }
                     }
                 }
             }
 
-            serializedObject.ApplyModifiedProperties();
-            if (hasSource) DrawBakeSettings(ready);
+            if (serializedObject.ApplyModifiedProperties())
+                foreach (SdfImage image in targets) image.RefreshEffects();
             DrawLegacyBindingCleanup();
         }
 
-        private void Field(string name, string label) =>
-            EditorGUILayout.PropertyField(serializedObject.FindProperty(name), new GUIContent(label));
-
-        private void DrawOutlineColor()
+        private float LayerHeight(int index)
         {
-            var useTextureColor = serializedObject.FindProperty("outlineUseTextureColor");
-            EditorGUILayout.PropertyField(useTextureColor, new GUIContent("Use Texture Color"));
-            if (!useTextureColor.boolValue || useTextureColor.hasMultipleDifferentValues)
-                Field("outlineColor", "Color");
-            if (useTextureColor.boolValue || useTextureColor.hasMultipleDifferentValues)
-            {
-                var intensity = serializedObject.FindProperty("outlineTextureColorIntensity");
-                EditorGUI.BeginChangeCheck();
-                EditorGUILayout.PropertyField(intensity, new GUIContent("Intensity"));
-                if (EditorGUI.EndChangeCheck()) intensity.floatValue = Mathf.Max(0, intensity.floatValue);
-                var opacity = serializedObject.FindProperty("outlineColor").FindPropertyRelative("a");
-                EditorGUILayout.Slider(opacity, 0, 1, new GUIContent("Opacity"));
-            }
+            var element = layers.GetArrayElementAtIndex(index);
+            var textureColor = element.FindPropertyRelative("useTextureColor");
+            int rows = textureColor.hasMultipleDifferentValues ? 8 : textureColor.boolValue ? 7 : 6;
+            return 4 + rows * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing)
+                + EditorGUI.GetPropertyHeight(element.FindPropertyRelative("offset"), new GUIContent("Offset"));
         }
 
+        private void DrawLayer(Rect rect, int index, bool active, bool focused)
+        {
+            var element = layers.GetArrayElementAtIndex(index);
+            var enabled = element.FindPropertyRelative("enabled");
+            string title = $"Layer {index + 1}";
+            if (index == 0) title += " (Front)";
+            else if (!layerCount.hasMultipleDifferentValues && index == layers.arraySize - 1) title += " (Back)";
+            EditorGUI.BeginProperty(rect, GUIContent.none, element);
+            rect.y += 2;
+            DrawLayerField(ref rect, enabled, title);
+            using (new EditorGUI.DisabledScope(!enabled.boolValue && !enabled.hasMultipleDifferentValues))
+            {
+                var position = element.FindPropertyRelative("position");
+                DrawLayerField(ref rect, position, "Position", "Outer, Inner or Center outlines; Underlay fills the silhouette behind the sprite for shadows and glow.");
+                var textureColor = element.FindPropertyRelative("useTextureColor");
+                DrawLayerField(ref rect, textureColor, "Use Texture Color");
+                if (!textureColor.boolValue || textureColor.hasMultipleDifferentValues)
+                    DrawLayerField(ref rect, element.FindPropertyRelative("color"), "Color");
+                if (textureColor.boolValue || textureColor.hasMultipleDifferentValues)
+                {
+                    DrawLayerField(ref rect, element.FindPropertyRelative("textureColorIntensity"), "Intensity");
+                    rect.height = EditorGUIUtility.singleLineHeight;
+                    EditorGUI.Slider(rect, element.FindPropertyRelative("color").FindPropertyRelative("a"), 0, 1, "Opacity");
+                    rect.y += rect.height + EditorGUIUtility.standardVerticalSpacing;
+                }
+                DrawLayerField(ref rect, element.FindPropertyRelative("width"), position.enumValueIndex == 3 ? "Spread" : "Width");
+                DrawLayerField(ref rect, element.FindPropertyRelative("softness"), "Softness");
+                DrawLayerField(ref rect, element.FindPropertyRelative("offset"), "Offset");
+            }
+            EditorGUI.EndProperty();
+        }
+
+        private static void DrawLayerField(ref Rect rect, SerializedProperty property, string label, string tooltip = null)
+        {
+            var content = new GUIContent(label, tooltip);
+            rect.height = EditorGUI.GetPropertyHeight(property, content);
+            EditorGUI.PropertyField(rect, property, content);
+            rect.y += rect.height + EditorGUIUtility.standardVerticalSpacing;
+        }
+
+        private void AddLayer(ReorderableList list)
+        {
+            int index = layers.arraySize;
+            layers.arraySize++;
+            var element = layers.GetArrayElementAtIndex(index);
+            var defaults = new SdfImageEffect();
+            element.FindPropertyRelative("enabled").boolValue = defaults.Enabled;
+            element.FindPropertyRelative("color").colorValue = defaults.Color;
+            element.FindPropertyRelative("width").floatValue = defaults.Width;
+            element.FindPropertyRelative("softness").floatValue = defaults.Softness;
+            element.FindPropertyRelative("offset").vector2Value = defaults.Offset;
+            element.FindPropertyRelative("position").enumValueIndex = (int)defaults.Position;
+            element.FindPropertyRelative("useTextureColor").boolValue = defaults.UseTextureColor;
+            element.FindPropertyRelative("textureColorIntensity").floatValue = defaults.TextureColorIntensity;
+            element.FindPropertyRelative("legacyRole").intValue = 0;
+            list.index = index;
+        }
         private static bool ToggleSection(SerializedProperty toggle, string title)
         {
             var rect = EditorGUILayout.GetControlRect();
@@ -168,37 +217,6 @@ namespace SDFUI.Editor
                     SdfTextureSettings.Set(path, settings);
                 }
                 SdfSourceImporter.RefreshTarget(image);
-            }
-        }
-
-        private void DrawBakeSettings(bool ready)
-        {
-            showBakeSettings = EditorGUILayout.Foldout(showBakeSettings, "SDF Settings", true);
-            if (!showBakeSettings) return;
-            if (targets.Length != 1 || !CanGenerate())
-            {
-                EditorGUILayout.HelpBox("Select one image with a sprite inside Assets to edit its SDF settings.", MessageType.Info);
-                return;
-            }
-            var image = (SdfImage)target;
-            string path = AssetDatabase.GetAssetPath(image.SourceSprite);
-            var settings = SdfTextureSettings.Get(path);
-            using (new EditorGUI.IndentLevelScope())
-            {
-                EditorGUI.BeginChangeCheck();
-                settings.enabled = EditorGUILayout.Toggle("Auto Update", settings.enabled);
-                settings.maxSize = EditorGUILayout.IntPopup("Maximum Size", settings.maxSize, SizeLabels, Sizes);
-                settings.padding = EditorGUILayout.IntSlider("Padding", settings.padding, 4, 128);
-                settings.range = EditorGUILayout.Slider("Distance Range", settings.range, 4, settings.padding);
-                settings.alphaThreshold = EditorGUILayout.Slider("Alpha Threshold", settings.alphaThreshold, 0.01f, 0.99f);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    SdfTextureSettings.Set(path, settings);
-                    SdfSourceImporter.RefreshTarget(image);
-                }
-                EditorGUILayout.HelpBox("Settings are shared by sprites in this source texture. " +
-                    "Auto Update refreshes the SDF when the source changes.", MessageType.None);
-                if (ready && GUILayout.Button("Refresh SDF")) ChangeGeneration(true);
             }
         }
 

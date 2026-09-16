@@ -8,13 +8,13 @@ Outlines and shadows for **Unity 6 / uGUI (Canvas)** sprites and TextMeshPro lab
 2. Assign the original sprite to **Source Image** on this component.
 3. If the sprite has no SDF yet, click **Generate SDF**. The image continues to display normally while baking.
 4. Standard Unity Image properties appear directly in the Inspector: **Source Image**, **Color**, **Material**, Raycast, Maskable, Image Type and its related options. These controls are always available, without a separate group or waiting for generation.
-5. When **SDF ready**, the Inspector also shows **Outline** and **Shadow** below. Enable an effect to reveal its settings; disabling it preserves the values for later use. **SDF Settings** is collapsed by default.
+5. After generation, edit **SDF Effects → Layers** in the component Inspector. Drag layers to reorder them; the top layer is in front. Bake controls are available in the source texture's **SDF Import Settings**.
 
-Settings belong to the **source texture** and apply to every sprite in that texture. Assigning a regular sprite does not start a bake. Generate SDF enables **Auto Update**, so later changes to the image, import settings or SDF settings trigger an update. You can change Auto Update in SDF Settings, or enable Generate SDF in the source texture's Inspector.
+Settings belong to the **source texture** and apply to every sprite in that texture. Assigning a regular sprite does not start a bake. Generation enables **Auto Update**, so later changes to the image, import settings or SDF settings trigger an update. You can change Auto Update in SDF Import Settings. The source texture's Inspector shows **Generate** until an SDF is available, then **Open SDF Import Settings**.
 
-Clicking **Cancel** or disabling Auto Update cancels queued and running work and prevents new jobs. Completed results remain available. To disable an effect, turn off **Outline** or **Shadow**; disabling both uses the standard Image rendering path.
+Clicking **Cancel** or disabling Auto Update cancels queued and running work and prevents new jobs. Completed results remain available. Disable individual layers to hide them, or turn off **Effects Enabled** to use the standard Image rendering path.
 
-In **Outline**, enable **Use Texture Color** to use the texture's RGB for the outline. **Intensity** `0` produces black, `1` keeps the original color, and values above `1` make it brighter. **Opacity** controls the outline's alpha separately. When disabled, the outline uses **Color** as before and retains your settings. Existing SDF sprites do not need rebaking.
+For each layer, enable **Use Texture Color** to use the texture's RGB for the effect. **Intensity** `0` produces black, `1` keeps the original color, and values above `1` make it brighter. **Opacity** controls the effect's alpha separately. When disabled, the layer uses **Color** and retains your settings. Existing SDF sprites do not need rebaking.
 
 ![Use Texture Color: gradient star, hollow ring and nine-sliced panel rendered in Unity URP](Documentation~/sdf-outline-texture-color-demo.png)
 
@@ -39,6 +39,8 @@ Positive **Spread** expands the glyph shape, zero keeps its size, and negative v
 Reordering requires a single selected label. You can edit shared layer settings across multiple labels, and add or remove layers together when their layer counts match.
 
 All effect layers are drawn behind all glyph faces. A later character's outline cannot cover its neighbour's face, even with tight spacing, fallback fonts or multiple materials. The component uses TMP's current mesh and font atlas and updates automatically when content, layout or fonts change at runtime. TMP's built-in Outline/Underlay/Glow effects are disabled on separate render materials; source fonts and materials remain unchanged.
+
+The material Inspector below **SDF Effects** edits the assigned TMP material preset, including Face Color, Softness and Dilate. Changes persist in that material and affect other labels sharing it. Choose a separate material preset for an independent style. Temporary render materials are hidden from the Inspector; use **SDF Effects** for outlines, shadows and glow.
 
 ![SDF Text: tight spacing, colored outline and soft glow rendered in Unity URP](Documentation~/sdf-text-demo.png)
 
@@ -90,13 +92,19 @@ Unlike the old single-outline component, width zero now renders an unexpanded ef
 
 The padded color texture, distance texture and `SdfSprite` descriptor are subassets of the **source image file itself**. The descriptor is also attached directly to the Sprite through Unity 6's `Sprite.AddScriptableObject` API; `SdfSprite.FromSprite(source)` retrieves it in the player.
 
+Expand the source image in the Project window and select **`<sprite name> SDF`** to open its import settings. This is the actual single-channel distance texture, with Unity's texture preview. The color texture and descriptor remain internal, and the original image stays the main asset. Expand **Imported Textures** to inspect both generated textures' dimensions and formats. **Open SDF Import Settings** on the source Inspector or SDF Image component opens the same entry.
+
+The source Inspector has an **SDF** foldout below **Open Sprite Editor**, beside the native **Advanced** section. It shows status and one action: **Generate** before a bake exists, or **Open SDF Import Settings** once it is ready. All bake controls live in **SDF Import Settings**: Auto Update, Padding, Distance Range, Alpha Threshold and Compress Distance, followed by Unity's native **Default** and platform icon tabs. The entire platform compression panel is Unity's native Sprite Inspector: **Max Size**, **Resize Algorithm**, the full platform **Format** list, **Compression**, **Use Crunch Compression**, and format-specific quality and platform controls. Platform tabs follow installed build modules. Each platform can override the defaults independently. Use **Apply** to save changes or **Revert** to discard pending edits. Inactive platform overrides do not invalidate the current target's bake. These settings belong to SDF generation and do not change the original texture's platform settings.
+
+**Clear SDF** in the import settings removes the generated textures and descriptor for every sprite in that source image, cancels any ongoing bake, and turns off Auto Update. The original image, Sprite references, and saved bake settings stay intact. The source Inspector returns to **Generate**. Clear supports Undo/Redo; local cache files may be reused when restoring or generating again.
+
 No separate `.asset`, SDF PNG or baked-image folder is created in Assets. Temporary cache data lives in `Library/SDFImage` and does not need to be committed. Commit the source image, its `.meta` file and the library. On a new machine, Unity rebakes sources with SDF enabled during import. The original image file and its image import settings remain unchanged; SDF settings are added to `TextureImporter.userData` while preserving its existing contents.
 
 `Image.sprite` keeps its reference to the original Sprite in the player to find the attached data. Baking does not run at runtime. Wait for Ready before building sources with Auto Update enabled. Build validation checks images in enabled scenes, Resources, preloaded assets and dependent prefabs. Sprites without generated SDF data use the standard Image renderer.
 
 ## Bounded, cancellable baking
 
-- Downscales **before** calculating distances. Max Size defaults to 512, with a range of 64–1024. The source texture's dimensions are unchanged.
+- Downscales **before** calculating distances. Max Size defaults to 512 and uses Unity's native size choices. The total bake budget below still applies. Choose Bilinear or Mitchell to control downsampling. The source texture's dimensions are unchanged.
 - Reads the GPU with `AsyncGPUReadback` and calculates distances on one worker in time linear to the pixel count. It does not perform synchronous GPU readback or wait for the worker on the main thread.
 - Runs one job at a time. Changing settings cancels outdated results; only the current generation can be published.
 - Caches by source, Sprite ID and settings. Reimporting valid data does not repeat the bake.
@@ -107,18 +115,32 @@ The Editor needs a graphics device that supports AsyncGPUReadback. Running with 
 
 ## Effects and limitations
 
-- Outer, inner and centered outlines with width, color and softness; shadows with offset, blur and spread. A bright shadow with zero offset creates a glow.
-- **Use Texture Color** replaces outline RGB with texture RGB × Intensity, without multiplying by Outline Color or Image Color RGB. Alpha still uses Outline Color/Opacity and the overall Image alpha. Intensity does not change alpha.
-- Preserves source RGB and alpha for the fill. `Graphic.color` tints the fill, while its alpha fades the entire image and effects once.
+- **SDF Effects → Layers** is a reorderable list, matching SDF Text: the top entry is in front. Each Image supports up to **16 layers**, with independent enable, color, width/spread, softness and offset. **Effects Enabled** toggles the entire list without losing its settings.
+- Each layer supports **Outer**, **Inner** or **Center** outlines. **Underlay** fills the silhouette behind the sprite for shadows and glow; positive Spread expands it and negative Spread contracts it. Exterior effects stay behind the sprite; inner outlines tint its inner edge.
+- Each layer has its own **Use Texture Color** and **Intensity**. This replaces layer RGB with texture RGB × Intensity, without multiplying by layer Color or Image Color RGB. Alpha still uses the layer Color/Opacity and overall Image alpha. Intensity does not change alpha.
+- Existing outline and shadow settings migrate into two layers. Released scalar APIs and legacy animation/prefab overrides follow their original layers after reordering. Clearing the list remains intentional.
+- Retains the source artwork and transparency for the fill, subject to the selected color compression. `Graphic.color` tints the fill, while its alpha fades the entire image and effects once.
 - Supports Simple, preserve aspect, nine-slice, layout and native size. The quad expands to avoid clipping outlines and shadows.
 - Supports `Mask`, `RectMask2D` including softness, and `CanvasGroup`. Raycasts still use the original RectTransform.
 - SDF Image supports Simple and Sliced with Fill Center enabled. Filled/radial fill, Tiled and Sliced with Fill Center disabled use the standard Unity Image renderer without SDF effects. Text is supported through `SdfText` as described above. SpriteRenderer, UI Toolkit and Coffee SoftMask/UIEffect are not integrated.
 
 Width, softness, offset, blur and spread use **Canvas local units**. Padding and Distance Range use **pixels of the downscaled SDF image**. The shader limits effects to the available padding and distance range; increase both if an outline stops expanding. Shadow offset is independent of the distance limit. Canvas and object transforms scale the effects too.
 
-The field uses linear RHalf, with positive distances inside the shape. The algorithm calculates the Euclidean distance to the opposite alpha class with a half-pixel correction. Alpha Threshold defines the boundary. This is a raster SDF, not vector reconstruction or MSDF; increasing Max Size helps preserve fine details.
+The field stores signed distances, positive inside the shape. The algorithm calculates the Euclidean distance to the opposite alpha class with a half-pixel correction. Alpha Threshold defines the boundary. Compressed storage normalizes these distances into a linear single-channel texture; the shader decodes them back to source pixels. This is a raster SDF, not vector reconstruction or MSDF; increasing Max Size helps preserve fine details.
 
-Each image has its own material and does not batch with images using other materials. The shader takes three texture samples per fragment. Large shadows increase overdraw. Textures have no mipmaps or compression: RGBA32 + RHalf uses about 6 bytes per texel on the GPU, plus about 6 bytes per texel for CPU-readable data, excluding the source texture and overhead. A 256×256 image with padding 32 uses about 600 KiB each on the GPU and CPU.
+Each image uses one quad and one material draw, compositing its layers before applying Graphic/CanvasGroup alpha once. It does not batch with images using other materials. The shader samples the fill once, distance once per visible layer, and color once more for each texture-colored layer. More layers increase fragment work; large offsets and soft effects increase the covered area. Multiple images using the same Sprite share its baked textures, and editing layers does not rebake them. The first 16 list entries are supported; entries beyond this limit are not rendered.
+
+### Baked texture memory and compression
+
+**SDF Import Settings** uses Unity's native Sprite compression controls and texture encoder. **Automatic** chooses a format from the platform and compression quality; a platform override exposes the same complete Format list as a normal Sprite, including applicable Crunch formats. The native controls show compressor quality and platform-specific options when relevant. Existing bake settings are retained when opening the Inspector.
+
+The native platform controls encode the padded **color** texture. **Compress Distance**, enabled by default, separately stores the distance map as **BC4** on desktop or **EAC R** on Android/iOS/tvOS (4 bits per texel), with **R8** on other targets. Each distance dimension is rounded up to a power of two by adding outside-of-shape texels at the top and right. This does not resize the artwork, move the sprite or change its usable effect padding. For example, a 400×400 sprite with padding 32 keeps its 464×464 field inside a 512×512 compressed texture. Color and distance use independent texture coordinates, so color formats and sprite slicing remain aligned.
+
+Disable **Compress Distance** to keep the original, uncompressed **RHalf (2 bytes per texel)** field and its exact padded dimensions. Compression is lossy; large Distance Range values or extreme magnification can expose contour errors. Both generated textures have no mipmaps and release their CPU-readable pixel copies. This does not change the original texture's format or Read/Write setting. Use GPU readback if tooling needs to inspect generated pixels. Older RHalf descriptors remain supported without changing existing object references.
+
+For a 400×400 sprite with padding 32 and BC7 color, the compressed distance map uses **128 KiB**, compared with **420.5 KiB** for RHalf. Together with the 464×464 color texture, the two baked textures use approximately **338 KiB of GPU pixel data**, compared with **631 KiB** with RHalf distance storage. These figures exclude the original texture, object overhead and any platform fallback. Editor memory reports can include extra texture data; measure a player build for runtime memory. This change does not optimize TMP font atlases or draw-call batching.
+
+Compression is lossy for the color artwork, including alpha and texture-colored outlines. Select **Compression: None** or **RGBA 32 bit** for exact baked colors; it still releases the CPU copies. RGB-only formats discard alpha, as they do for ordinary sprites. Crunch reduces stored data rather than GPU memory. Color textures receive unused right/top padding as required by the selected block format (or square power-of-two padding for PVRTC), without stretching the image or changing its pivot, borders or native size. Unsupported target GPUs may decompress textures and use more memory; validate your target devices. Lower Maximum Size and keep Padding only as large as your effects require to reduce memory further.
 
 ## API
 
@@ -129,7 +151,7 @@ using UnityEngine;
 public sealed class ButtonStyle : MonoBehaviour
 {
     [SerializeField] private SdfImage image;
-    [SerializeField] private Sprite icon; // Generate SDF enabled in the Editor.
+    [SerializeField] private Sprite icon; // SDF generated in the Editor.
 
     private void Awake()
     {
@@ -150,6 +172,20 @@ public sealed class ButtonStyle : MonoBehaviour
 
 To color the outline from the texture, set `image.OutlineUseTextureColor = true` and `image.OutlineTextureColorIntensity = 1f`. This mode is disabled by default; intensity defaults to `1` and accepts values of `0` or greater. `image.OutlineColor.a` still controls opacity; `Image.color` RGB only tints the fill.
 
+For multiple effects, edit the list and call `RefreshEffects()` after changing entries or their order:
+
+```csharp
+image.Layers.Clear();
+image.Layers.Add(new SdfImageEffect { Width = 3, Color = Color.blue });
+image.Layers.Add(new SdfImageEffect { Width = 8, Color = Color.white });
+image.Layers.Add(new SdfImageEffect {
+    Position = SdfOutlinePosition.Underlay,
+    Spread = 8, Softness = 4, Offset = new Vector2(3, -5),
+    Color = new Color(0, 0, 0, 0.5f)
+});
+image.RefreshEffects();
+```
+
 ## Demo, installation and testing
 
 **Tools → SDF Image → Create Demo Prefab** creates a separate sample in `Assets/SDFImageDemo`, with three source images that have SDF enabled and a prefab demonstrating outlines, shadows, glow, Sliced and RectMask2D. Wait for Ready, then drag the prefab into an empty scene. The command does not modify the open scene.
@@ -166,7 +202,7 @@ https://github.com/phucnguyen752/sdf-image.git#upm
 
 This URL follows the `upm` branch. After each release, select **SDF Image** in Package Manager and click **Update**; keep the same URL and let Package Manager update the version. If you installed a tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
 
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.6.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
+To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.7.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
 
 The `upm` branch and version tags contain the `com.sdfimage.ugui` package at the repository root; no `?path=` is needed. The `main` branch contains the full Unity project, with the library in `Assets/SDFImage`. Keep `#upm` in the URL because the default `main` branch does not have a package at its root.
 

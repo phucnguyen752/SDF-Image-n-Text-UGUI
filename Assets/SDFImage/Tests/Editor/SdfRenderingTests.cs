@@ -26,6 +26,8 @@ namespace SDFUI.Tests
         private Canvas canvas;
         private RenderTexture target;
         private SdfSprite sprite;
+        private Texture2D editedColor;
+        private SdfSprite editedSprite;
 
         [UnitySetUp]
         public IEnumerator SetUp()
@@ -101,8 +103,64 @@ namespace SDFUI.Tests
             }
             if (previewScene.IsValid())
                 EditorSceneManager.ClosePreviewScene(previewScene);
+            if (editedSprite) Object.DestroyImmediate(editedSprite);
+            if (editedColor) Object.DestroyImmediate(editedColor);
             if (!string.IsNullOrEmpty(folder))
                 AssetDatabase.DeleteAsset(folder);
+        }
+
+        [UnityTest]
+        public IEnumerator BlockPadding_KeepsColorAlignedWithDistanceInSimpleAndSlicedImages()
+        {
+            var settings = SdfTextureSettings.Get(sourcePath);
+            settings.padding = 9;
+            settings.range = 9;
+            SdfTextureSettings.Set(sourcePath, settings);
+            double deadline = EditorApplication.timeSinceStartup + 30;
+            while (EditorApplication.timeSinceStartup < deadline)
+            {
+                sprite = SdfSprite.FromSprite(AssetDatabase.LoadAssetAtPath<Sprite>(sourcePath));
+                if (sprite && sprite.Padding == 9) break;
+                yield return null;
+            }
+            Assert.That(sprite.Padding, Is.EqualTo(9));
+            Assert.That(sprite.DistanceTexture.width, Is.EqualTo(64));
+            SdfImage image = CreateImage(canvas.transform);
+            image.OutlineWidth = 5;
+            image.OutlineColor = Color.red;
+            foreach (SdfImageType type in new[] { SdfImageType.Simple, SdfImageType.Sliced })
+            {
+                sprite.Initialize(sprite.SourceSprite, sprite.ColorTexture, sprite.DistanceTexture, sprite.SourceSize,
+                    type == SdfImageType.Sliced ? new Vector4(10, 10, 10, 10) : Vector4.zero,
+                    sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, sprite.AlphaThreshold, normalized: sprite.NormalizedDistance);
+                image.Type = type;
+                image.rectTransform.sizeDelta = type == SdfImageType.Sliced ? new Vector2(76, 60) : new Vector2(64, 64);
+                image.RefreshSdf();
+                Color[] compressed = Render();
+                Texture2D compressedColor = sprite.ColorTexture;
+                Texture2D copy = SdfTestTextureReadback.Copy(compressedColor);
+                var exactSize = new Texture2D(50, 50, TextureFormat.RGBA32, false, true);
+                try
+                {
+                    exactSize.SetPixels(copy.GetPixels(0, 0, 50, 50));
+                    exactSize.Apply(false, false);
+                    sprite.Initialize(sprite.SourceSprite, exactSize, sprite.DistanceTexture, sprite.SourceSize,
+                        sprite.Border, sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, sprite.AlphaThreshold, normalized: sprite.NormalizedDistance);
+                    image.RefreshSdf();
+                    Color[] reference = Render();
+                    float maxError = 0;
+                    for (int i = 0; i < reference.Length; i++)
+                        maxError = Mathf.Max(maxError, Mathf.Abs(reference[i].g - compressed[i].g));
+                    Assert.That(maxError, Is.LessThan(0.015f), "Block alignment must not shift or stretch the artwork.");
+                }
+                finally
+                {
+                    sprite.Initialize(sprite.SourceSprite, compressedColor, sprite.DistanceTexture, sprite.SourceSize,
+                        sprite.Border, sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, sprite.AlphaThreshold, normalized: sprite.NormalizedDistance);
+                    Object.DestroyImmediate(exactSize);
+                    Object.DestroyImmediate(copy);
+                }
+            }
         }
 
         [Test]
@@ -181,7 +239,7 @@ namespace SDFUI.Tests
         public void TextureColoredOutline_PreservesOpacityTintAndClippingOnSlicedImages()
         {
             sprite.Initialize(sprite.SourceSprite, sprite.ColorTexture, sprite.DistanceTexture, sprite.SourceSize,
-                new Vector4(4, 4, 4, 4), sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange);
+                new Vector4(4, 4, 4, 4), sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, normalized: sprite.NormalizedDistance);
             RectTransform clip = CreateMask("Texture Outline Clip", canvas.transform, new Vector2(100, 16), Vector2.zero, false);
             clip.gameObject.AddComponent<CanvasGroup>().alpha = 0.4f;
             SdfImage image = CreateImage(clip);
@@ -262,7 +320,7 @@ namespace SDFUI.Tests
             PrepareWhiteAntialiasedSource();
             if (type == SdfImageType.Sliced)
                 sprite.Initialize(sprite.SourceSprite, sprite.ColorTexture, sprite.DistanceTexture, sprite.SourceSize,
-                    new Vector4(4, 4, 4, 4), sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange);
+                    new Vector4(4, 4, 4, 4), sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, normalized: sprite.NormalizedDistance);
             SdfImage image = CreateImage(canvas.transform);
             image.Type = type;
             image.rectTransform.sizeDelta = new Vector2(1024, 64);
@@ -297,6 +355,67 @@ namespace SDFUI.Tests
             AssertBlue(Average(pixels, 26, -6, 6, 12), "A positive X shadow offset must render on the right.");
             Assert.That(Average(pixels, -32, -6, 6, 12).a, Is.LessThan(0.05f),
                 "The shadow must not appear at the mirrored offset.");
+        }
+
+        [Test]
+        public void MultipleImageLayers_OrderOffsetAndTextureColorAreIndependent()
+        {
+            SdfImage image = CreateImage(canvas.transform);
+            image.Layers.Clear();
+            var front = new SdfImageEffect { Width = 4, Color = Color.red };
+            var back = new SdfImageEffect { Width = 8, Color = Color.blue };
+            image.Layers.Add(front);
+            image.Layers.Add(back);
+            image.Layers.Add(new SdfImageEffect { Width = 0, Position = SdfOutlinePosition.Underlay,
+                Offset = new Vector2(20, 0), Color = Color.yellow });
+            image.RefreshEffects();
+            var first = Render();
+            AssertGreen(Average(first, -6, -6, 12, 12), "All exterior layers stay behind the sprite.");
+            AssertRed(Average(first, 17, -5, 2, 10), "The front outline wins in the overlap.");
+            AssertBlue(Average(first, 21, -5, 2, 10), "The wider rear outline remains visible outside the front outline.");
+            Color shifted = Average(first, 29, -5, 3, 10);
+            AssertColor(shifted, QualitySettings.activeColorSpace == ColorSpace.Linear ? Color.yellow.linear : Color.yellow,
+                "The shifted underlay uses its own color.");
+            SaveCapture("image-multiple-layers.png", first);
+
+            front.UseTextureColor = true;
+            front.TextureColorIntensity = 0.4f;
+            image.RefreshEffects();
+            var textured = Render();
+            Color ring = Average(textured, 17, -5, 2, 10);
+            Assert.That(ring.g, Is.EqualTo(0.4f).Within(0.04f));
+            Assert.That(ring.r, Is.LessThan(0.02f));
+            AssertBlue(Average(textured, 21, -5, 2, 10), "Texture color must not leak into another layer.");
+
+            image.Layers[0] = back;
+            image.Layers[1] = front;
+            image.RefreshEffects();
+            AssertBlue(Average(Render(), 17, -5, 2, 10), "Changing list order changes the visible overlapping layer.");
+            back.Enabled = false;
+            image.RefreshEffects();
+            Assert.That(Average(Render(), 17, -5, 2, 10).g, Is.EqualTo(0.4f).Within(0.04f));
+        }
+
+        [TestCase(3)]
+        [TestCase(SdfImage.MaxEffectLayers)]
+        public void MultipleImageLayers_FadeOnceAndUseWorkingSpaceColors(int count)
+        {
+            canvas.gameObject.AddComponent<CanvasGroup>().alpha = 0.5f;
+            SdfImage image = CreateImage(canvas.transform);
+            image.color = new Color(1, 1, 1, 0.8f);
+            image.Layers.Clear();
+            Color expected = new Color(0.25f, 0.5f, 0.75f, 1);
+            for (int i = 0; i < count; i++)
+                image.Layers.Add(new SdfImageEffect { Width = 6, Color = i == 0 ? expected : Color.red });
+            image.RefreshEffects();
+            Color actual = Average(Render(), 18, -5, 2, 10);
+            if (QualitySettings.activeColorSpace == ColorSpace.Linear) expected = expected.linear;
+            Assert.That(actual.a, Is.EqualTo(0.4f).Within(0.02f));
+            Assert.That(actual.r, Is.EqualTo(expected.r * 0.4f).Within(0.02f));
+            Assert.That(actual.g, Is.EqualTo(expected.g * 0.4f).Within(0.02f));
+            Assert.That(actual.b, Is.EqualTo(expected.b * 0.4f).Within(0.02f));
+            Assert.That(image.materialForRendering.GetInt("_LayerCount"), Is.EqualTo(count));
+            Assert.That(image.canvasRenderer.materialCount, Is.EqualTo(1));
         }
 
         [Test]
@@ -445,6 +564,12 @@ namespace SDFUI.Tests
 
         private void PrepareWhiteAntialiasedSource()
         {
+            // Mutate a disposable copy; imported textures intentionally have no CPU-readable data.
+            editedColor = SdfTestTextureReadback.Copy(sprite.ColorTexture);
+            editedSprite = ScriptableObject.CreateInstance<SdfSprite>();
+            editedSprite.Initialize(sprite.SourceSprite, editedColor, sprite.DistanceTexture, sprite.SourceSize,
+                sprite.Border, sprite.Pivot, sprite.PixelsPerUnit, sprite.Padding, sprite.DistanceRange, sprite.AlphaThreshold, normalized: sprite.NormalizedDistance);
+            sprite = editedSprite;
             // The last inside texel is only 60% covered but still exceeds the
             // baker's 50% threshold, so the existing binary SDF remains correct.
             // This isolates the mismatch between RGBA alpha and SDF coverage.

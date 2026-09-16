@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — 2026-09-16
+
+- Remove the Ready badge and SDF Settings foldout from the SDF Image component Inspector; keep bake controls in the source texture's SDF Import Settings.
+- Avoid unnecessary bake-queue updates when editing SDF Image effect layers, undoing or re-enabling the component. Only changed sources or missing/stale bake data enter the auto-bake queue.
+- Add a reorderable Layers list to SDF Image, matching SDF Text. Support up to 16 independently colored/offset outlines, shadows and glows in one quad/material draw, with per-layer texture color and intensity. Preserve inner/center outlines, clipping, one-time alpha fading, legacy scalar APIs and existing serialized effects.
+- Compress distance maps as BC4 on desktop or EAC R on mobile, with R8 on other targets. Pad to power-of-two dimensions without resizing the sprite, and preserve effect coordinates, slicing and asset identities. Add Compress Distance (on by default); disable it to retain exact RHalf precision and dimensions.
+- Reuse the full native Sprite compression Inspector for SDF color textures, including platform Format lists, resize algorithms, Crunch and format-specific settings. Encode through Unity's texture importer pipeline while preserving the original source settings.
+- Fix SDF Text material editing: show the assigned TMP material preset with its native material Inspector and hide read-only render copies.
+- Show a selectable SDF subasset below each baked source sprite, with a preview and Apply/Revert Inspector. Add Default, Standalone, Android and iOS overrides for bake size, color compression and quality.
+- Reuse Unity's native platform icon tabs in SDF Import Settings and move detailed bake controls out of the source and component Inspectors.
+- Show Generate or Open SDF Import Settings according to bake state. Add Clear SDF with cancellation, Undo/Redo, and preserved source sprites and bake settings.
+- Group the source texture's SDF status and action in an SDF foldout below Open Sprite Editor, alongside the native Advanced section.
+- Compress baked SDF Image color textures by build target: BC7 on Windows/Linux, ETC2 RGBA8 on Android, and ASTC 4x4 on iOS/tvOS. Add an Uncompressed option for exact colors; other targets retain RGBA32.
+- Release CPU-readable copies of both generated textures; retain RHalf distance precision when Compress Distance is disabled.
+- Handle block-aligned color padding without changing sprite placement, native size or generated object identities.
+
 ## 0.6.0 — 2026-09-16
 
 - Unify SDF Text outlines, shadows and glow in one reorderable Layers list, with independent color, signed spread, softness, offset and enable controls. The top layer is in front; all layers stay behind the glyph faces.

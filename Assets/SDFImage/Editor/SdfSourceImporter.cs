@@ -9,7 +9,7 @@ namespace SDFUI.Editor
     /// <summary>Publishes already-computed data into the source image's import result. Never computes SDF here.</summary>
     public sealed class SdfSourceImporter : AssetPostprocessor
     {
-        public override uint GetVersion() => 3;
+        public override uint GetVersion() => 12;
 
         private void OnPostprocessSprites(Texture2D texture, Sprite[] sprites)
         {
@@ -17,37 +17,43 @@ namespace SDFUI.Editor
                 !assetPath.StartsWith("Assets/", StringComparison.Ordinal)) return;
             context.DependsOnCustomDependency(SdfBakeCache.DependencyName(assetPath));
             var settings = SdfTextureSettings.Get(importer);
-            string fingerprint = settings.enabled ? SdfTextureSettings.Fingerprint(assetPath, importer) : string.Empty;
+            if (settings.cleared) return;
+            BuildTarget target = context.selectedBuildTarget;
+            var storage = settings.ResolveTexturePlatform(target);
+            string fingerprint = settings.enabled ? SdfTextureSettings.Fingerprint(assetPath, importer, target) : string.Empty;
             foreach (var source in sprites)
             {
                 SdfBakeData data = default;
                 bool current = settings.enabled && SdfBakeCache.TryRead(assetPath, source, fingerprint, out data);
                 // Keep a completed old result while an update is pending or auto-generation is disabled.
                 if (!current && !SdfBakeCache.TryReadLatest(assetPath, source, out data)) continue;
-                var color = new Texture2D(data.width + data.padding * 2, data.height + data.padding * 2,
-                    TextureFormat.RGBA32, false, !data.sRGB)
+                int width = data.width + data.padding * 2, height = data.height + data.padding * 2;
+                TextureFormat format = SdfTextureCompression.Format(storage, target);
+                Vector2Int colorSize = SdfTextureCompression.Size(width, height, format);
+                // Extend the unused right/top edge for block compression; never resize the artwork.
+                int colorWidth = colorSize.x;
+                int colorHeight = colorSize.y;
+                var color = SdfTextureCompression.Encode(PadColor(data.color, width, height, colorWidth, colorHeight),
+                    colorWidth, colorHeight, storage, format, data.sRGB, message => context.LogImportWarning(message));
+                color.name = source.name + " SDF Color";
+                color.hideFlags = HideFlags.HideInHierarchy;
+                var distance = settings.compressDistance
+                    ? SdfTextureCompression.EncodeDistance(data, storage, target, message => context.LogImportWarning(message))
+                    : new Texture2D(width, height, TextureFormat.RHalf, false, true);
+                distance.name = source.name + " SDF";
+                distance.wrapMode = TextureWrapMode.Clamp;
+                distance.filterMode = FilterMode.Bilinear;
+                distance.hideFlags = HideFlags.None;
+                if (!settings.compressDistance)
                 {
-                    name = source.name + " SDF Color",
-                    wrapMode = TextureWrapMode.Clamp,
-                    filterMode = FilterMode.Bilinear,
-                    hideFlags = HideFlags.HideInHierarchy
-                };
-                color.SetPixels32(data.color);
-                color.Apply(false, false);
-                var distance = new Texture2D(color.width, color.height, TextureFormat.RHalf, false, true)
-                {
-                    name = source.name + " SDF Distance",
-                    wrapMode = TextureWrapMode.Clamp,
-                    filterMode = FilterMode.Bilinear,
-                    hideFlags = HideFlags.HideInHierarchy
-                };
-                distance.SetPixelData(data.distanceHalf, 0);
-                distance.Apply(false, false);
+                    distance.SetPixelData(data.distanceHalf, 0);
+                    distance.Apply(false, true);
+                }
                 var descriptor = ScriptableObject.CreateInstance<SdfSprite>();
-                descriptor.name = source.name + " SDF";
+                descriptor.name = source.name + " SDF Data";
                 descriptor.hideFlags = HideFlags.HideInHierarchy;
                 descriptor.Initialize(source, color, distance, new Vector2Int(data.width, data.height), data.border,
-                    data.pivot, data.ppu, data.padding, data.range, data.alphaThreshold, data.fingerprint);
+                    data.pivot, data.ppu, data.padding, data.range, data.alphaThreshold, data.fingerprint, settings.compressDistance);
                 string identifier = "sdf-image/" + SdfBakeCache.SpriteKey(source);
                 context.AddObjectToAsset(identifier + "/color", color);
                 context.AddObjectToAsset(identifier + "/distance", distance);
@@ -55,6 +61,19 @@ namespace SDFUI.Editor
                 if (!source.AddScriptableObject(descriptor))
                     throw new InvalidOperationException("Could not attach SDF data to Sprite '" + source.name + "'.");
             }
+        }
+
+        private static Color32[] PadColor(Color32[] source, int width, int height, int paddedWidth, int paddedHeight)
+        {
+            if (width == paddedWidth && height == paddedHeight) return source;
+            var pixels = new Color32[paddedWidth * paddedHeight];
+            for (int y = 0; y < paddedHeight; y++)
+            {
+                int row = Math.Min(y, height - 1) * width;
+                Array.Copy(source, row, pixels, y * paddedWidth, width);
+                for (int x = width; x < paddedWidth; x++) pixels[y * paddedWidth + x] = source[row + width - 1];
+            }
+            return pixels;
         }
 
         private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] movedFrom)
@@ -185,7 +204,12 @@ namespace SDFUI.Editor
                 if (!image.SourceSprite) continue;
                 string path = AssetDatabase.GetAssetPath(image.SourceSprite);
                 // Assigning an ordinary Sprite is valid and does not opt it into generation.
-                if (SdfTextureSettings.Get(path).enabled) SdfBakeQueue.Enqueue(path);
+                if (!SdfTextureSettings.Get(path).enabled) continue;
+                // Enable, Undo/Redo and explicit refresh may revisit an already current bake.
+                // Keep Ready stable instead of queueing another cache check for that source.
+                var data = image.SdfData;
+                if (!data || !data.IsValid || data.BakeFingerprint != SdfTextureSettings.Fingerprint(path))
+                    SdfBakeQueue.Enqueue(path);
             }
             EditorApplication.QueuePlayerLoopUpdate();
         }

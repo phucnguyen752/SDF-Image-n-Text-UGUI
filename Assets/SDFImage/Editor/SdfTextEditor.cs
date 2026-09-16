@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using TMPro.EditorUtilities;
 using UnityEditor;
@@ -13,6 +14,8 @@ namespace SDFUI.Editor
     {
         private SerializedProperty effectsEnabled, layers, layerCount;
         private ReorderableList layerList;
+        private UnityEditor.Editor fontMaterialEditor;
+        private readonly List<Object> fontMaterials = new List<Object>();
 
         protected override void OnEnable()
         {
@@ -33,6 +36,14 @@ namespace SDFUI.Editor
                 onCanAddCallback = list => !layerCount.hasMultipleDifferentValues,
                 onCanRemoveCallback = list => !layerCount.hasMultipleDifferentValues && list.count > 0
             };
+            RefreshMaterialEditor();
+        }
+
+        protected override void OnDisable()
+        {
+            if (fontMaterialEditor) DestroyImmediate(fontMaterialEditor);
+            fontMaterialEditor = null;
+            base.OnDisable();
         }
 
         public override void OnInspectorGUI()
@@ -70,6 +81,40 @@ namespace SDFUI.Editor
             }
 
             if (serializedObject.ApplyModifiedProperties())
+                foreach (SdfText text in targets) text.RefreshEffects();
+
+            DrawFontMaterial();
+        }
+
+        private void RefreshMaterialEditor()
+        {
+            fontMaterials.Clear();
+            foreach (SdfText text in targets)
+                if (text && text.fontSharedMaterial && !fontMaterials.Contains(text.fontSharedMaterial))
+                    fontMaterials.Add(text.fontSharedMaterial);
+            if (fontMaterials.Count == 0)
+            {
+                if (fontMaterialEditor) DestroyImmediate(fontMaterialEditor);
+                fontMaterialEditor = null;
+                return;
+            }
+            // CanvasRenderer uses a temporary face-only copy. Always edit the authored
+            // TMP material so changes persist and rendering can safely refresh its copy.
+            CreateCachedEditor(fontMaterials.ToArray(), typeof(MaterialEditor), ref fontMaterialEditor);
+        }
+
+        private void DrawFontMaterial()
+        {
+            RefreshMaterialEditor();
+            if (!fontMaterialEditor) return;
+            EditorGUILayout.Space();
+            fontMaterialEditor.DrawHeader();
+            if (!((MaterialEditor)fontMaterialEditor).isVisible) return;
+            EditorGUILayout.HelpBox("Edits apply to all text using this material preset. " +
+                "Use SDF Effects for outlines, shadows and glow.", MessageType.None);
+            EditorGUI.BeginChangeCheck();
+            fontMaterialEditor.OnInspectorGUI();
+            if (EditorGUI.EndChangeCheck())
                 foreach (SdfText text in targets) text.RefreshEffects();
         }
 
