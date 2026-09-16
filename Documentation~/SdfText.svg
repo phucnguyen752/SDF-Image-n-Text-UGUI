@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>SDF Text component icon</title>
+  <rect x="5" y="7" width="54" height="50" rx="10" stroke="#C2C2C2" stroke-width="2"/>
+  <path d="M18 21H46V29H42V25H35V43H40V47H24V43H29V25H22V29H18V21Z" fill="#C2C2C2"/>
+</svg>

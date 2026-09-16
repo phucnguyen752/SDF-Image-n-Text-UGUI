@@ -127,8 +127,9 @@ Shader "UI/SDF Text Effect"
                 float rate = minimumRate >= maximumRate * 0.999
                     ? (minimumRate + maximumRate) * 0.5
                     : clamp(length(gradient), minimumRate, maximumRate);
-                // Derive AA from the pixel's atlas footprint, not noisy sampled-alpha gradients.
-                float aa = 0.5 * max(length(atlasDx), length(atlasDy)) / distanceRange;
+                // Cover both axes of the pixel's atlas footprint so diagonal edges stay smooth.
+                // Keep this independent of noisy sampled-alpha gradients and authored softness.
+                float aa = 0.5 * sqrt(dot(atlasDx, atlasDx) + dot(atlasDy, atlasDy)) / distanceRange;
                 return float2(rate, aa);
             }
 
