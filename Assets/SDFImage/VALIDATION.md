@@ -1,5 +1,25 @@
 # Validation
 
+## 0.6.0 — unified SDF Text layers (2026-09-16)
+
+Validated the unified Layers list, Linear color correction and antialiasing update in the isolated local UPM fixture with Unity **6000.0.83f1**.
+
+| Check | Result |
+| --- | --- |
+| Built-in pipeline, Gamma | **87 / 87 EditMode tests passed**, zero skipped, 14.120 s |
+| URP, Linear | **87 / 87 EditMode tests passed**, zero skipped, 14.257 s |
+| StandaloneWindows64 player script compilation | **Passed**, 17 runtime assemblies |
+
+The suite includes 27 SdfText cases covering layer order across fallback materials, signed spread, offsets and masks, source geometry updates, cleared lists, legacy settings and prefab variants, compatibility aliases after reordering, and effect color/opacity. The Linear color regression failed before the correction and passes afterward. A separate Editor serialization check passed add/remove, signed spread, mixed values and single-label reorder with Undo/Redo; multi-label reordering is disabled to prevent Unity from copying one label's values over another's.
+
+Five controlled antialiasing cases compared small, large and rotated labels, including stock and regenerated font atlases, against an 8× render reference. Using both atlas footprint axes reduced edge RMSE by approximately **4–18%** while retaining smoothstep, Softness behavior and the existing texture sample count. This does not restore detail missing from low-resolution glyphs.
+
+The [1600×900 Layers demo](Documentation~/sdf-text-layers-demo.png) was rendered in URP Linear and inspected at native resolution. Final test, player-script, Inspector and demo logs contain no C# errors, shader errors, exceptions or native file-move failures.
+
+Reports: [Built-in Gamma](Documentation~/Tests-TextLayers-Builtin.xml), [URP Linear](Documentation~/Tests-TextLayers-URP-Linear.xml), [player assemblies](Documentation~/TextLayers-player-assemblies.txt). Git may normalize report line endings; XML content and the assembly list are preserved. Inspector and antialiasing probe logs remain in the development project's ignored `Build/Validation` directory as `tmp-layers-inspector.log` and `tmp-layers-aa-stock-probe.log`.
+
+No complete player build, mobile device run or mouse-driven Inspector interaction was performed. Player script compilation and serialized Editor actions are separate checks from those workflows.
+
 ## 0.5.0 — texture-colored outlines (2026-09-08)
 
 Validated the optional SdfImage texture-color outline with Unity **6000.0.83f1** through the isolated local UPM fixture: **71/71 EditMode tests passed** in Built-in Gamma (14.756 s) and URP 17.0.4 Linear (13.784 s), with zero skips. StandaloneWindows64 player scripts compiled successfully with **17 runtime assemblies**.

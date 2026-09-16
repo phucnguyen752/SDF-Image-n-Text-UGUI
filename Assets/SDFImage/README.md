@@ -26,9 +26,19 @@ The legacy `SdfAutoBake` component is retained so older prefabs still load. Imag
 
 1. Create **GameObject → UI → SDF Text**. The `SdfText` component derives from `TextMeshProUGUI` and keeps the standard TMP Inspector for content, font, font size, alignment, spacing, auto size and rich text.
 2. Assign a TMP font with an SDF atlas. There is no need to Generate SDF or bake text into sprites.
-3. Enable **Outline** or **Shadow** in **SDF Effects** below the Inspector. Width, softness, offset, blur and spread use Canvas local units.
+3. Enable **Effects Enabled** in **SDF Effects** below the Inspector. Spread, softness and offset use Canvas local units.
 
-All shadows are drawn first, then all outlines, then the glyph faces. A later character's outline cannot cover its neighbour's face, even with tight spacing, fallback fonts or multiple materials. The component uses TMP's current mesh and font atlas and updates automatically when content, layout or fonts change at runtime. TMP's built-in Outline/Underlay/Glow effects are disabled on separate render materials; source fonts and materials remain unchanged.
+Use **+** and **−** in **Layers** to add or remove effects, and drag the handles to reorder them. The top layer is in front, closest to the text; the last layer is at the back. Each layer has its own enable toggle, Color, Spread, Softness and Offset. **Effects Enabled** controls the whole list and retains its settings when disabled.
+
+![SDF Text Layers: stacked outlines, an offset shadow and reordered colors rendered in Unity URP](Documentation~/sdf-text-layers-demo.png)
+
+Positive **Spread** expands the glyph shape, zero keeps its size, and negative values contract it. **Softness** blurs the edge. Use a dark layer with an offset for a shadow, or a bright soft layer with zero offset for glow. Outlines, shadows and glow share the same list and follow its order.
+
+**Softness 0** still uses antialiasing. Enlarged contours from low-resolution glyphs can remain rough; regenerate the font at a higher sampling size, with enough atlas space and padding for large labels and thick effects. Softness adds blur but cannot restore missing glyph detail.
+
+Reordering requires a single selected label. You can edit shared layer settings across multiple labels, and add or remove layers together when their layer counts match.
+
+All effect layers are drawn behind all glyph faces. A later character's outline cannot cover its neighbour's face, even with tight spacing, fallback fonts or multiple materials. The component uses TMP's current mesh and font atlas and updates automatically when content, layout or fonts change at runtime. TMP's built-in Outline/Underlay/Glow effects are disabled on separate render materials; source fonts and materials remain unchanged.
 
 ![SDF Text: tight spacing, colored outline and soft glow rendered in Unity URP](Documentation~/sdf-text-demo.png)
 
@@ -46,23 +56,35 @@ public sealed class ScoreLabel : MonoBehaviour
 {
     [SerializeField] private SdfText label;
 
-    public void SetScore(int score)
+    private void Awake()
     {
-        label.SetText("Score: {0}", score);
-        label.OutlineEnabled = true;
-        label.OutlineWidth = 2;
-        label.OutlineColor = Color.black;
-        label.ShadowEnabled = true;
-        label.ShadowOffset = new Vector2(0, -3);
-        label.ShadowBlur = 2;
+        label.EffectsEnabled = true;
+        label.Layers.Clear();
+        label.Layers.Add(new SdfTextEffect { Color = Color.black, Width = 2 });
+        label.Layers.Add(new SdfTextEffect
+        {
+            Color = new Color(0, 0, 0, 0.3f),
+            Width = 0,
+            Softness = 2,
+            Offset = new Vector2(0, -3)
+        });
+        label.RefreshEffects();
     }
+
+    public void SetScore(int score) => label.SetText("Score: {0}", score);
 }
 ```
 
+`Layers` exposes a mutable `List<SdfTextEffect>`. Each entry has `Enabled`, signed `Width` (shown as Spread in the Inspector), `Softness`, `Color` and `Offset` properties. `Spread` is an alias for `Width`. After adding, removing, reordering or editing entries from code, call `RefreshEffects()`.
+
+Existing outline settings migrate in their current order, followed by the old shadow as the back layer, with its settings and enabled state preserved. New labels start with an enabled outline layer and a disabled shadow layer. The earlier `Outline*` and `Shadow*` properties remain compatibility aliases for their migrated layers, including after reordering; use `Layers` and `EffectsEnabled` for new code.
+
+Unlike the old single-outline component, width zero now renders an unexpanded effect. This also applies to migrated width-zero outlines; disable the layer to hide it.
+
 - Supports `TextMeshProUGUI` on a Canvas only. 3D `TextMeshPro` and custom font shaders that do not use SDF are not supported.
-- Width and blur are limited by the font atlas's existing padding and distance range. If an effect stops expanding, regenerate the font atlas with more padding; sprite bake settings do not affect fonts.
+- Spread and softness are limited by the font atlas's existing padding and distance range. If an effect stops expanding, regenerate the font atlas with more padding; sprite bake settings do not affect fonts.
 - Supports ancestor Canvases, `Mask`, `RectMask2D` and `CanvasGroup` in the hierarchy. Place `Canvas`, `Mask` and `RectMask2D` on a parent object. Attaching them directly to the text object disables SDF effects.
-- Effects add render layers and materials for the font materials in use. More fallback fonts or large shadows increase draw calls or overdraw.
+- Each active effect layer adds a render layer and material for each font material in use. More layers or fallback fonts increase draw calls, while large effects increase overdraw.
 
 ## Textures embedded in the source sprite
 
@@ -144,7 +166,7 @@ https://github.com/phucnguyen752/sdf-image.git#upm
 
 This URL follows the `upm` branch. After each release, select **SDF Image** in Package Manager and click **Update**; keep the same URL and let Package Manager update the version. If you installed a tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
 
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.5.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
+To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.6.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
 
 The `upm` branch and version tags contain the `com.sdfimage.ugui` package at the repository root; no `?path=` is needed. The `main` branch contains the full Unity project, with the library in `Assets/SDFImage`. Keep `#upm` in the URL because the default `main` branch does not have a package at its root.
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-09-16
+
+- Unify SDF Text outlines, shadows and glow in one reorderable Layers list, with independent color, signed spread, softness, offset and enable controls. The top layer is in front; all layers stay behind the glyph faces.
+- Add one Effects Enabled toggle for the entire list. Zero spread preserves the glyph shape; negative spread contracts it.
+- Migrate existing SDF Text outline and shadow settings into the layer list.
+- Correct SDF Text effect colors in Linear color space so layers match the selected colors instead of rendering too bright.
+- Improve SDF Text edge antialiasing using both axes of the atlas pixel footprint, without extra texture samples or changing Softness.
+- Add a dedicated SDF Text component icon.
+
 ## 0.5.0 — 2026-09-08
 
 - Add optional texture-colored SdfImage outlines with adjustable intensity and separate opacity, reusing existing baked color data without rebaking. Fixed-color outlines remain the default.

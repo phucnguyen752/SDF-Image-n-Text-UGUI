@@ -9,21 +9,33 @@ namespace SDFUI
     [ExecuteAlways, AddComponentMenu("UI/SDF Text")]
     public sealed class SdfText : TextMeshProUGUI
     {
-        [SerializeField] private bool sdfOutlineEnabled = true;
-        [SerializeField, Min(0)] private float sdfOutlineWidth = 2;
-        [SerializeField, Min(0)] private float sdfOutlineSoftness;
-        [SerializeField] private Color sdfOutlineColor = Color.black;
-        [SerializeField] private bool sdfShadowEnabled;
-        [SerializeField] private Vector2 sdfShadowOffset = new Vector2(2, -2);
-        [SerializeField, Min(0)] private float sdfShadowBlur = 2;
-        [SerializeField] private float sdfShadowSpread;
-        [SerializeField] private Color sdfShadowColor = new Color(0, 0, 0, 0.3f);
+        [SerializeField] private bool sdfEffectsEnabled = true;
+        [SerializeField] private List<SdfTextEffect> sdfLayers = new List<SdfTextEffect>();
+        [SerializeField, HideInInspector] private bool sdfLayersMigrated;
+
+        // Keep legacy fields serialized so existing scenes and prefab overrides can migrate.
+        [SerializeField, HideInInspector] private bool sdfOutlineEnabled = true;
+        [SerializeField, HideInInspector] private List<SdfTextEffect> sdfOutlines = new List<SdfTextEffect>();
+        [SerializeField, HideInInspector] private bool sdfOutlinesMigrated;
+        [SerializeField, HideInInspector] private float sdfOutlineWidth = 2;
+        [SerializeField, HideInInspector] private float sdfOutlineSoftness;
+        [SerializeField, HideInInspector] private Color sdfOutlineColor = Color.black;
+        [SerializeField, HideInInspector] private Vector2 sdfLegacyOutlineSize;
+        [SerializeField, HideInInspector] private Color sdfLegacyOutlineColor;
+        [SerializeField, HideInInspector] private bool sdfLegacyOutlineEnabled;
+        [SerializeField, HideInInspector] private bool sdfShadowEnabled;
+        [SerializeField, HideInInspector] private Vector2 sdfShadowOffset = new Vector2(2, -2);
+        [SerializeField, HideInInspector] private float sdfShadowBlur = 2;
+        [SerializeField, HideInInspector] private float sdfShadowSpread;
+        [SerializeField, HideInInspector] private Color sdfShadowColor = new Color(0, 0, 0, 0.3f);
+        [SerializeField, HideInInspector] private bool sdfLegacyShadowEnabled;
+        [SerializeField, HideInInspector] private Vector4 sdfLegacyShadowSize;
+        [SerializeField, HideInInspector] private Color sdfLegacyShadowColor;
 
         private RectTransform effectRoot;
         private CanvasGroup effectGroup;
         // Unity hot reload must restore ownership together with effectRoot.
-        private List<SdfTextLayer> shadows = new List<SdfTextLayer>();
-        private List<SdfTextLayer> outlines = new List<SdfTextLayer>();
+        private List<SdfTextLayer> effectLayers = new List<SdfTextLayer>();
         private readonly List<CanvasGroup> ownGroups = new List<CanvasGroup>();
         private readonly List<RectMask2D> clipMasks = new List<RectMask2D>();
         private Material faceSource, faceStencil, faceMaterial;
@@ -31,25 +43,50 @@ namespace SDFUI
         private bool meshCleared;
         private static Shader effectShader;
 
-        public bool OutlineEnabled { get => sdfOutlineEnabled; set { if (sdfOutlineEnabled == value) return; sdfOutlineEnabled = value; RefreshEffects(); } }
-        public float OutlineWidth { get => sdfOutlineWidth; set { sdfOutlineWidth = Positive(value); RefreshEffects(); } }
-        public float OutlineSoftness { get => sdfOutlineSoftness; set { sdfOutlineSoftness = Positive(value); RefreshEffects(); } }
-        public Color OutlineColor { get => sdfOutlineColor; set { sdfOutlineColor = value; RefreshEffects(); } }
-        public bool ShadowEnabled { get => sdfShadowEnabled; set { if (sdfShadowEnabled == value) return; sdfShadowEnabled = value; RefreshEffects(); } }
-        public Vector2 ShadowOffset { get => sdfShadowOffset; set { sdfShadowOffset = new Vector2(Finite(value.x), Finite(value.y)); RefreshEffects(); } }
-        public float ShadowBlur { get => sdfShadowBlur; set { sdfShadowBlur = Positive(value); RefreshEffects(); } }
-        public float ShadowSpread { get => sdfShadowSpread; set { sdfShadowSpread = Finite(value); RefreshEffects(); } }
-        public Color ShadowColor { get => sdfShadowColor; set { sdfShadowColor = value; RefreshEffects(); } }
+        public bool EffectsEnabled { get => sdfEffectsEnabled; set { if (sdfEffectsEnabled == value) return; sdfEffectsEnabled = value; RefreshEffects(); } }
+        /// <summary>Frontmost effect first. Call RefreshEffects after changing the list or its entries.</summary>
+        public List<SdfTextEffect> Layers { get { MigrateLayers(); return sdfLayers; } }
+
+        // Released scalar APIs follow their original layers even when the list is reordered.
+        public bool OutlineEnabled { get => LegacyLayer(SdfTextEffectRole.Outline, false)?.Enabled ?? false; set { LegacyLayer(SdfTextEffectRole.Outline, true).Enabled = value; RefreshEffects(); } }
+        public float OutlineWidth { get => LegacyLayer(SdfTextEffectRole.Outline, false)?.Width ?? 0; set { LegacyLayer(SdfTextEffectRole.Outline, true).Width = Positive(value); RefreshEffects(); } }
+        public float OutlineSoftness { get => LegacyLayer(SdfTextEffectRole.Outline, false)?.Softness ?? 0; set { LegacyLayer(SdfTextEffectRole.Outline, true).Softness = value; RefreshEffects(); } }
+        public Color OutlineColor { get => LegacyLayer(SdfTextEffectRole.Outline, false)?.Color ?? Color.clear; set { LegacyLayer(SdfTextEffectRole.Outline, true).Color = value; RefreshEffects(); } }
+        public Vector2 OutlineOffset { get => LegacyLayer(SdfTextEffectRole.Outline, false)?.Offset ?? Vector2.zero; set { LegacyLayer(SdfTextEffectRole.Outline, true).Offset = value; RefreshEffects(); } }
+        public bool ShadowEnabled { get => LegacyLayer(SdfTextEffectRole.Shadow, false)?.Enabled ?? false; set { LegacyLayer(SdfTextEffectRole.Shadow, true).Enabled = value; RefreshEffects(); } }
+        public Vector2 ShadowOffset { get => LegacyLayer(SdfTextEffectRole.Shadow, false)?.Offset ?? Vector2.zero; set { LegacyLayer(SdfTextEffectRole.Shadow, true).Offset = value; RefreshEffects(); } }
+        public float ShadowBlur { get => LegacyLayer(SdfTextEffectRole.Shadow, false)?.Softness ?? 0; set { LegacyLayer(SdfTextEffectRole.Shadow, true).Softness = value; RefreshEffects(); } }
+        public float ShadowSpread { get => LegacyLayer(SdfTextEffectRole.Shadow, false)?.Width ?? 0; set { LegacyLayer(SdfTextEffectRole.Shadow, true).Width = value; RefreshEffects(); } }
+        public Color ShadowColor { get => LegacyLayer(SdfTextEffectRole.Shadow, false)?.Color ?? Color.clear; set { LegacyLayer(SdfTextEffectRole.Shadow, true).Color = value; RefreshEffects(); } }
 
         // These components change the draw/mask domain of the text itself. A parent is supported.
         public bool EffectsSupported => !GetComponent<Canvas>() && !GetComponent<Mask>() && !GetComponent<RectMask2D>();
-        private bool HasEffects => sdfOutlineEnabled && sdfOutlineWidth > 0 && sdfOutlineColor.a > 0
-            || sdfShadowEnabled && sdfShadowColor.a > 0;
+        private bool HasEffects
+        {
+            get
+            {
+                if (sdfEffectsEnabled)
+                    foreach (var layer in Layers)
+                        if (layer != null && layer.IsVisible) return true;
+                return false;
+            }
+        }
 
         protected override void OnEnable()
         {
+            MigrateLayers();
             base.OnEnable();
-            if (effectRoot) effectRoot.gameObject.SetActive(true);
+            if (effectRoot)
+            {
+                // Recover all owned graphics across hot reload, including older pool layouts.
+                effectLayers.Clear();
+                for (int i = 0; i < effectRoot.childCount; i++)
+                {
+                    var layer = effectRoot.GetChild(i).GetComponent<SdfTextLayer>();
+                    if (layer) effectLayers.Add(layer);
+                }
+                effectRoot.gameObject.SetActive(true);
+            }
             Canvas.preWillRenderCanvases += SyncEffects;
             RefreshEffects();
         }
@@ -84,11 +121,8 @@ namespace SDFUI
 #if UNITY_EDITOR
         protected override void OnValidate()
         {
-            sdfOutlineWidth = Positive(sdfOutlineWidth);
-            sdfOutlineSoftness = Positive(sdfOutlineSoftness);
-            sdfShadowBlur = Positive(sdfShadowBlur);
-            sdfShadowSpread = Finite(sdfShadowSpread);
-            sdfShadowOffset = new Vector2(Finite(sdfShadowOffset.x), Finite(sdfShadowOffset.y));
+            MigrateLayers();
+            foreach (var layer in sdfLayers) layer?.Sanitize();
             base.OnValidate();
             RefreshEffects();
         }
@@ -96,6 +130,7 @@ namespace SDFUI
 
         public void RefreshEffects()
         {
+            MigrateLayers();
             havePropertiesChanged = true;
             SetVerticesDirty();
             SetMaterialDirty();
@@ -155,8 +190,7 @@ namespace SDFUI
         {
             base.UpdateGeometry(mesh, index);
             meshCleared = false;
-            if (index < shadows.Count && shadows[index]) shadows[index].UseMesh(mesh);
-            if (index < outlines.Count && outlines[index]) outlines[index].UseMesh(mesh);
+            SyncEffects();
         }
 
         protected override void OnTransformParentChanged()
@@ -205,27 +239,35 @@ namespace SDFUI
                 effectRoot.gameObject.SetActive(true);
 
                 int count = textInfo.materialCount;
-                while (shadows.Count < count)
+                int layerCount = sdfLayers.Count;
+                while (effectLayers.Count < count * layerCount)
+                    effectLayers.Add(CreateLayer("Effect"));
+
+                for (int i = 0; i < count; i++)
                 {
-                    shadows.Add(CreateLayer("Shadow"));
-                    outlines.Add(CreateLayer("Outline"));
-                }
-                for (int i = 0; i < shadows.Count; i++)
-                {
-                    shadows[i].transform.SetSiblingIndex(i);
-                    outlines[i].transform.SetSiblingIndex(shadows.Count + i);
-                    var info = i < count ? textInfo.meshInfo[i] : default;
+                    var info = textInfo.meshInfo[i];
                     Material source = i == 0 ? fontSharedMaterial
                         : i < m_subTextObjects.Length && m_subTextObjects[i] ? m_subTextObjects[i].sharedMaterial : null;
-                    bool active = i < count && info.vertexCount > 0 && IsDistanceField(source);
+                    bool active = info.vertexCount > 0 && IsDistanceField(source);
                     // Match the actual face renderer, including a mesh supplied via UpdateGeometry.
                     Mesh renderedMesh = i == 0 ? canvasRenderer.GetMesh()
                         : i < m_subTextObjects.Length && m_subTextObjects[i] ? m_subTextObjects[i].canvasRenderer.GetMesh() : null;
-                    shadows[i].Configure(this, renderedMesh, source, effectShader, true,
-                        active && sdfShadowEnabled && sdfShadowColor.a > 0);
-                    outlines[i].Configure(this, renderedMesh, source, effectShader, false,
-                        active && sdfOutlineEnabled && sdfOutlineWidth > 0 && sdfOutlineColor.a > 0);
+                    for (int layerIndex = 0; layerIndex < layerCount; layerIndex++)
+                    {
+                        var style = sdfLayers[layerIndex];
+                        var layer = effectLayers[layerIndex * count + i];
+                        layer.Configure(this, renderedMesh, source, effectShader,
+                            style?.Color ?? Color.clear, style?.Width ?? 0, style?.Softness ?? 0,
+                            style?.Offset ?? Vector2.zero, active && style != null && style.IsVisible);
+                    }
                 }
+                // Group by style across every fallback material: the last list item is behind
+                // the first. Every effect remains behind the complete native face hierarchy.
+                int sibling = 0;
+                for (int layerIndex = layerCount - 1; layerIndex >= 0; layerIndex--)
+                    for (int i = 0; i < count; i++)
+                        effectLayers[layerIndex * count + i].transform.SetSiblingIndex(sibling++);
+                for (int i = count * layerCount; i < effectLayers.Count; i++) effectLayers[i].Clear();
                 // Fallback layers may first appear after the Canvas clipping phase.
                 if (CanvasUpdateRegistry.IsRebuildingGraphics())
                 {
@@ -240,8 +282,114 @@ namespace SDFUI
         {
             // TMP may clear text during a Canvas rebuild. Unbinding meshes is safe there;
             // disabling Graphics would unregister them from the active rebuild queue.
-            foreach (var layer in shadows) if (layer) layer.Clear();
-            foreach (var layer in outlines) if (layer) layer.Clear();
+            foreach (var layer in effectLayers) if (layer) layer.Clear();
+        }
+
+        private SdfTextEffect LegacyLayer(SdfTextEffectRole role, bool create)
+        {
+            MigrateLayers();
+            var layer = FindLegacyLayer(role);
+            if (layer != null || !create) return layer;
+            layer = CreateLegacyLayer(role);
+            if (role == SdfTextEffectRole.Outline) sdfLayers.Insert(0, layer);
+            else sdfLayers.Add(layer);
+            return layer;
+        }
+
+        private SdfTextEffect FindLegacyLayer(SdfTextEffectRole role)
+        {
+            foreach (var layer in sdfLayers)
+                if (layer != null && layer.LegacyRole == role) return layer;
+            return null;
+        }
+
+        private SdfTextEffect CreateLegacyLayer(SdfTextEffectRole role)
+        {
+            return role == SdfTextEffectRole.Shadow
+                ? new SdfTextEffect
+                {
+                    Enabled = sdfShadowEnabled, Width = sdfShadowSpread, Softness = sdfShadowBlur,
+                    Color = sdfShadowColor, Offset = sdfShadowOffset, LegacyRole = role
+                }
+                : new SdfTextEffect
+                {
+                    Enabled = sdfOutlineEnabled, Width = sdfOutlineWidth, Softness = sdfOutlineSoftness,
+                    Color = sdfOutlineColor, LegacyRole = role
+                };
+        }
+
+        private void MigrateLayers()
+        {
+            sdfOutlineWidth = Positive(sdfOutlineWidth);
+            sdfOutlineSoftness = Positive(sdfOutlineSoftness);
+            sdfShadowBlur = Positive(sdfShadowBlur);
+            sdfShadowSpread = Finite(sdfShadowSpread);
+            sdfShadowOffset = new Vector2(Finite(sdfShadowOffset.x), Finite(sdfShadowOffset.y));
+            if (sdfLayers == null) sdfLayers = new List<SdfTextEffect>();
+            if (!sdfLayersMigrated)
+            {
+                if (sdfOutlines == null) sdfOutlines = new List<SdfTextEffect>();
+                if (!sdfOutlinesMigrated && sdfOutlines.Count == 0)
+                    sdfOutlines.Add(CreateLegacyLayer(SdfTextEffectRole.Outline));
+                else if (sdfOutlinesMigrated && sdfOutlines.Count > 0 && sdfOutlines[0] != null)
+                    ApplyLegacyOutlineSize(sdfOutlines[0]);
+                if (sdfLayers.Count == 0)
+                {
+                    for (int i = 0; i < sdfOutlines.Count; i++)
+                    {
+                        var outline = sdfOutlines[i];
+                        if (outline == null) { sdfLayers.Add(null); continue; }
+                        sdfLayers.Add(new SdfTextEffect
+                        {
+                            Enabled = sdfOutlineEnabled && outline.Enabled, Width = outline.Width,
+                            Softness = outline.Softness, Color = outline.Color, Offset = outline.Offset,
+                            LegacyRole = i == 0 ? SdfTextEffectRole.Outline : SdfTextEffectRole.None
+                        });
+                    }
+                    // An intentionally cleared outline list with no enabled shadow stays empty.
+                    // Its hidden shadow settings remain available to the compatibility setters.
+                    if (sdfOutlines.Count > 0 || sdfShadowEnabled)
+                        sdfLayers.Add(CreateLegacyLayer(SdfTextEffectRole.Shadow));
+                }
+                sdfOutlinesMigrated = true;
+                sdfLayersMigrated = true;
+            }
+            else
+            {
+                // Variants of a migrated base prefab can still override released scalar fields.
+                // Apply only changed legacy channels, leaving new list edits and a cleared list intact.
+                var outline = FindLegacyLayer(SdfTextEffectRole.Outline);
+                if (outline != null)
+                {
+                    ApplyLegacyOutlineSize(outline);
+                    if (sdfOutlineEnabled != sdfLegacyOutlineEnabled) outline.Enabled = sdfOutlineEnabled;
+                }
+                var shadow = FindLegacyLayer(SdfTextEffectRole.Shadow);
+                if (shadow != null)
+                {
+                    if (sdfShadowEnabled != sdfLegacyShadowEnabled) shadow.Enabled = sdfShadowEnabled;
+                    if (sdfShadowOffset.x != sdfLegacyShadowSize.x || sdfShadowOffset.y != sdfLegacyShadowSize.y)
+                        shadow.Offset = new Vector2(
+                            sdfShadowOffset.x != sdfLegacyShadowSize.x ? sdfShadowOffset.x : shadow.Offset.x,
+                            sdfShadowOffset.y != sdfLegacyShadowSize.y ? sdfShadowOffset.y : shadow.Offset.y);
+                    if (sdfShadowBlur != sdfLegacyShadowSize.z) shadow.Softness = sdfShadowBlur;
+                    if (sdfShadowSpread != sdfLegacyShadowSize.w) shadow.Width = sdfShadowSpread;
+                    if (!sdfShadowColor.Equals(sdfLegacyShadowColor)) shadow.Color = sdfShadowColor;
+                }
+            }
+            sdfLegacyOutlineSize = new Vector2(sdfOutlineWidth, sdfOutlineSoftness);
+            sdfLegacyOutlineColor = sdfOutlineColor;
+            sdfLegacyOutlineEnabled = sdfOutlineEnabled;
+            sdfLegacyShadowEnabled = sdfShadowEnabled;
+            sdfLegacyShadowSize = new Vector4(sdfShadowOffset.x, sdfShadowOffset.y, sdfShadowBlur, sdfShadowSpread);
+            sdfLegacyShadowColor = sdfShadowColor;
+        }
+
+        private void ApplyLegacyOutlineSize(SdfTextEffect outline)
+        {
+            if (sdfOutlineWidth != sdfLegacyOutlineSize.x) outline.Width = sdfOutlineWidth;
+            if (sdfOutlineSoftness != sdfLegacyOutlineSize.y) outline.Softness = sdfOutlineSoftness;
+            if (!sdfOutlineColor.Equals(sdfLegacyOutlineColor)) outline.Color = sdfOutlineColor;
         }
 
         private void EnsureRoot()
@@ -256,8 +404,7 @@ namespace SDFUI
             effectGroup.blocksRaycasts = false;
             effectGroup.interactable = false;
             // The sibling may have been destroyed together with an old parent.
-            shadows.Clear();
-            outlines.Clear();
+            effectLayers.Clear();
         }
 
         private SdfTextLayer CreateLayer(string layerName)

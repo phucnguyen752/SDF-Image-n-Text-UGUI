@@ -1,0 +1,17 @@
+SDFUI.dll
+Unity.Burst.dll
+Unity.Collections.dll
+Unity.Mathematics.dll
+Unity.Rendering.LightTransport.Runtime.dll
+Unity.RenderPipeline.Universal.ShaderLibrary.dll
+Unity.RenderPipelines.Core.Runtime.dll
+Unity.RenderPipelines.Core.Runtime.Shared.dll
+Unity.RenderPipelines.Core.ShaderLibrary.dll
+Unity.RenderPipelines.GPUDriven.Runtime.dll
+Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.dll
+Unity.RenderPipelines.Universal.2D.Runtime.dll
+Unity.RenderPipelines.Universal.Config.Runtime.dll
+Unity.RenderPipelines.Universal.Runtime.dll
+Unity.RenderPipelines.Universal.Shaders.dll
+Unity.TextMeshPro.dll
+UnityEngine.UI.dll

@@ -15,7 +15,8 @@ namespace SDFUI
         public override Texture mainTexture => effectMaterial ? effectMaterial.mainTexture : s_WhiteTexture;
         public override Material material { get => effectMaterial; set { } }
 
-        internal void Configure(SdfText owner, Mesh mesh, Material source, Shader shader, bool shadow, bool visible)
+        internal void Configure(SdfText owner, Mesh mesh, Material source, Shader shader,
+            Color color, float width, float softness, Vector2 offset, bool visible)
         {
             Owner = owner;
             if (!visible) { Clear(); return; }
@@ -25,9 +26,10 @@ namespace SDFUI
             if (!effectMaterial) effectMaterial = new Material(shader) { name = "SDF Text Effect", hideFlags = HideFlags.HideAndDontSave };
             effectMaterial.CopyPropertiesFromMaterial(source);
             effectMaterial.shaderKeywords = System.Array.Empty<string>();
-            effectMaterial.SetColor("_EffectColor", shadow ? owner.ShadowColor : owner.OutlineColor);
-            effectMaterial.SetFloat("_EffectWidth", shadow ? owner.ShadowSpread : owner.OutlineWidth);
-            effectMaterial.SetFloat("_EffectSoftness", shadow ? owner.ShadowBlur : owner.OutlineSoftness);
+            // Inspector colors are sRGB; this non-HDR material property expects working-space RGB.
+            effectMaterial.SetColor("_EffectColor", QualitySettings.activeColorSpace == ColorSpace.Linear ? color.linear : color);
+            effectMaterial.SetFloat("_EffectWidth", width);
+            effectMaterial.SetFloat("_EffectSoftness", softness);
             effectMaterial.SetInt("_StencilComp", 8);
             effectMaterial.SetInt("_Stencil", 0);
             effectMaterial.SetInt("_StencilOp", 0);
@@ -39,7 +41,7 @@ namespace SDFUI
             rectTransform.anchorMax = Vector2.one;
             rectTransform.pivot = owner.rectTransform.pivot;
             rectTransform.sizeDelta = Vector2.zero;
-            rectTransform.anchoredPosition = shadow ? owner.ShadowOffset : Vector2.zero;
+            rectTransform.anchoredPosition = offset;
             UseMesh(mesh);
             UpdateMaterial();
             canvasRenderer.SetColor(owner.canvasRenderer.GetColor());
