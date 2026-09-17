@@ -1,0 +1,8 @@
+6000.0.83f1
+Windows 11  (10.0.26200)
+13th Gen Intel(R) Core(TM) i5-13600KF
+NVIDIA GeForce RTX 3060
+Direct3D11
+Development=True
+Pipeline=UniversalRenderPipelineAsset
+Resolution=1280x720

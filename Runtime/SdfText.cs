@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 namespace SDFUI
 {
-    /// <summary>TMP text with all glyph effects behind all glyph faces. Sizes use Canvas local units.</summary>
+    /// <summary>TMP text with effect layers below or above all glyph faces. Sizes use Canvas local units.</summary>
     [ExecuteAlways, AddComponentMenu("UI/SDF Text")]
     public sealed class SdfText : TextMeshProUGUI
     {
@@ -34,17 +34,44 @@ namespace SDFUI
 
         private RectTransform effectRoot;
         private CanvasGroup effectGroup;
-        // Unity hot reload must restore ownership together with effectRoot.
+        private RectTransform aboveEffectRoot;
+        private CanvasGroup aboveEffectGroup;
+        // Unity hot reload must restore ownership together with the effect roots.
         private List<SdfTextLayer> effectLayers = new List<SdfTextLayer>();
+        // Retain ownership of older mesh copies across an Editor hot reload.
+        private List<Mesh> innerMeshes = new List<Mesh>();
         private readonly List<CanvasGroup> ownGroups = new List<CanvasGroup>();
         private readonly List<RectMask2D> clipMasks = new List<RectMask2D>();
         private Material faceSource, faceStencil, faceMaterial;
+        private SdfTextMaterials.Entry faceEntry;
         private bool syncing;
+        private bool generatingMesh;
+        private bool effectsDirty = true;
+        private bool effectsVisible;
+        private GameObject cachedObject;
+        private Matrix4x4 lastTransform;
+        private Color lastRendererColor;
+        private int lastLayer, lastSibling, lastMaterialRevision, lastComponentCount;
+        private float lastGroupAlpha = 1;
+        private bool lastIgnoreGroups;
+        private int geometryVersion;
+        private float lastLossyScaleY;
         private bool meshCleared;
+        private readonly List<PaddingState> paddingCache = new List<PaddingState>();
+        private bool paddingExtra, paddingBold;
         private static Shader effectShader;
 
+        private struct PaddingState
+        {
+            internal Material source;
+            internal int crc;
+            internal float padding;
+        }
+
+        internal List<SdfTextEffect> RenderLayers => sdfLayers;
+
         public bool EffectsEnabled { get => sdfEffectsEnabled; set { if (sdfEffectsEnabled == value) return; sdfEffectsEnabled = value; RefreshEffects(); } }
-        /// <summary>Frontmost effect first. Call RefreshEffects after changing the list or its entries.</summary>
+        /// <summary>Frontmost effect first within each side of the text. Call RefreshEffects after editing.</summary>
         public List<SdfTextEffect> Layers { get { MigrateLayers(); return sdfLayers; } }
 
         // Released scalar APIs follow their original layers even when the list is reordered.
@@ -74,48 +101,70 @@ namespace SDFUI
 
         protected override void OnEnable()
         {
+            cachedObject = gameObject;
+            SdfTextMaterials.WatchChanges();
             MigrateLayers();
             base.OnEnable();
-            if (effectRoot)
-            {
-                // Recover all owned graphics across hot reload, including older pool layouts.
-                effectLayers.Clear();
-                for (int i = 0; i < effectRoot.childCount; i++)
-                {
-                    var layer = effectRoot.GetChild(i).GetComponent<SdfTextLayer>();
-                    if (layer) effectLayers.Add(layer);
-                }
-                effectRoot.gameObject.SetActive(true);
-            }
-            Canvas.preWillRenderCanvases += SyncEffects;
+            paddingCache.Clear();
+            foreach (var mesh in innerMeshes) Release(mesh);
+            innerMeshes.Clear();
+            // Recover all owned graphics across hot reload, including older pool layouts.
+            effectLayers.Clear();
+            RecoverLayers(effectRoot);
+            RecoverLayers(aboveEffectRoot);
+            Canvas.preWillRenderCanvases += CheckEffects;
+            Canvas.willRenderCanvases += SyncScale;
+            geometryVersion++;
             RefreshEffects();
         }
 
         protected override void OnDisable()
         {
-            Canvas.preWillRenderCanvases -= SyncEffects;
+            Canvas.preWillRenderCanvases -= CheckEffects;
+            Canvas.willRenderCanvases -= SyncScale;
             if (effectRoot) effectRoot.gameObject.SetActive(false);
+            if (aboveEffectRoot) aboveEffectRoot.gameObject.SetActive(false);
             base.OnDisable();
+            SdfTextMaterials.Release(ref faceEntry);
+            faceMaterial = faceSource = faceStencil = null;
         }
 
         protected override void OnDestroy()
         {
-            Canvas.preWillRenderCanvases -= SyncEffects;
-            if (effectRoot)
-            {
-                var root = effectRoot.gameObject;
-                effectRoot = null;
-#if UNITY_EDITOR
-                // Scene teardown may already be destroying this sibling. Wait until that
-                // operation completes before removing a root left by component removal/Undo.
-                if (!Application.isPlaying)
-                    UnityEditor.EditorApplication.delayCall += () => { if (root) DestroyImmediate(root); };
-                else
-#endif
-                    Destroy(root);
-            }
-            Release(faceMaterial);
+            Canvas.preWillRenderCanvases -= CheckEffects;
+            Canvas.willRenderCanvases -= SyncScale;
+            DestroyRoot(ref effectRoot);
+            DestroyRoot(ref aboveEffectRoot);
+            foreach (var mesh in innerMeshes) Release(mesh);
+            innerMeshes.Clear();
+            SdfTextMaterials.Release(ref faceEntry);
             base.OnDestroy();
+        }
+
+        private void RecoverLayers(RectTransform root)
+        {
+            if (!root) return;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var layer = root.GetChild(i).GetComponent<SdfTextLayer>();
+                if (layer) effectLayers.Add(layer);
+            }
+            root.gameObject.SetActive(true);
+        }
+
+        private static void DestroyRoot(ref RectTransform effectRoot)
+        {
+            if (!effectRoot) return;
+            var root = effectRoot.gameObject;
+            effectRoot = null;
+#if UNITY_EDITOR
+            // Scene teardown may already be destroying this sibling. Wait until that
+            // operation completes before removing a root left by component removal/Undo.
+            if (!Application.isPlaying)
+                UnityEditor.EditorApplication.delayCall += () => { if (root) DestroyImmediate(root); };
+            else
+#endif
+                Destroy(root);
         }
 
 #if UNITY_EDITOR
@@ -136,20 +185,50 @@ namespace SDFUI
             SetMaterialDirty();
         }
 
+        public override void SetVerticesDirty()
+        {
+            effectsDirty = true;
+            base.SetVerticesDirty();
+        }
+
+        public override void SetMaterialDirty()
+        {
+            effectsDirty = true;
+            base.SetMaterialDirty();
+        }
+
+        protected override void OnCanvasGroupChanged()
+        {
+            base.OnCanvasGroupChanged();
+            effectsDirty = true;
+        }
+
+        protected override void OnCanvasHierarchyChanged()
+        {
+            base.OnCanvasHierarchyChanged();
+            effectsDirty = true;
+        }
+
+        public override void RecalculateClipping()
+        {
+            effectsDirty = true;
+            base.RecalculateClipping();
+        }
+
         public override Material GetModifiedMaterial(Material baseMaterial)
         {
             Material modified = base.GetModifiedMaterial(baseMaterial);
             if (!isActiveAndEnabled || !EffectsSupported || !IsDistanceField(modified)) return modified;
             faceSource = baseMaterial;
             faceStencil = modified;
-            return FaceOnly(faceSource, ref faceMaterial, faceStencil);
+            return FaceOnly(faceSource, ref faceMaterial, ref faceEntry, faceStencil);
         }
 
         protected override void GenerateTextMesh()
         {
             meshCleared = false;
             bool propertiesChanged = m_havePropertiesChanged;
-            base.UpdateMeshPadding();
+            RestoreNativePadding();
             m_havePropertiesChanged = propertiesChanged;
             // Padding affects geometry only; TMP still owns advances, wrapping and preferred size.
             // Use the available atlas border, never sample across adjacent glyph atlas rectangles.
@@ -161,8 +240,48 @@ namespace SDFUI
                         m_subTextObjects[i].padding = Mathf.Max(m_subTextObjects[i].padding,
                             AtlasPadding(m_subTextObjects[i].sharedMaterial));
             }
-            base.GenerateTextMesh();
+            generatingMesh = true;
+            try { base.GenerateTextMesh(); }
+            finally { generatingMesh = false; }
+            geometryVersion++;
+            lastLossyScaleY = rectTransform.lossyScale.y;
             SyncEffects();
+        }
+
+        private void RestoreNativePadding()
+        {
+            int count = Mathf.Max(1, m_subTextObjects.Length);
+            bool changed = checkPaddingRequired || paddingCache.Count != count ||
+                paddingExtra != m_enableExtraPadding || paddingBold != m_isUsingBold;
+            for (int i = 0; !changed && i < count; i++)
+            {
+                Material source = i == 0 ? m_sharedMaterial : m_subTextObjects[i] ? m_subTextObjects[i].sharedMaterial : null;
+                changed = paddingCache[i].source != source || paddingCache[i].crc != (source ? source.ComputeCRC() : 0);
+            }
+            if (changed)
+            {
+                // TMP reads shader keywords when calculating padding. Only do that when
+                // the preset/bold/extra-padding inputs change, not on every counter update.
+                base.UpdateMeshPadding();
+                paddingCache.Clear();
+                for (int i = 0; i < count; i++)
+                {
+                    Material source = i == 0 ? m_sharedMaterial : m_subTextObjects[i] ? m_subTextObjects[i].sharedMaterial : null;
+                    paddingCache.Add(new PaddingState
+                    {
+                        source = source, crc = source ? source.ComputeCRC() : 0,
+                        padding = i == 0 ? m_padding : m_subTextObjects[i] ? m_subTextObjects[i].padding : 0
+                    });
+                }
+                paddingExtra = m_enableExtraPadding;
+                paddingBold = m_isUsingBold;
+            }
+            else
+            {
+                m_padding = paddingCache[0].padding;
+                for (int i = 1; i < count; i++)
+                    if (m_subTextObjects[i]) m_subTextObjects[i].padding = paddingCache[i].padding;
+            }
         }
 
         public override void ClearMesh()
@@ -175,6 +294,7 @@ namespace SDFUI
         public override void UpdateVertexData(TMP_VertexDataUpdateFlags flags)
         {
             base.UpdateVertexData(flags);
+            geometryVersion++;
             meshCleared = false;
             SyncEffects();
         }
@@ -182,6 +302,7 @@ namespace SDFUI
         public override void UpdateVertexData()
         {
             base.UpdateVertexData();
+            geometryVersion++;
             meshCleared = false;
             SyncEffects();
         }
@@ -189,6 +310,7 @@ namespace SDFUI
         public override void UpdateGeometry(Mesh mesh, int index)
         {
             base.UpdateGeometry(mesh, index);
+            geometryVersion++;
             meshCleared = false;
             SyncEffects();
         }
@@ -197,17 +319,20 @@ namespace SDFUI
         {
             base.OnTransformParentChanged();
             if (effectRoot && transform.parent) effectRoot.SetParent(transform.parent, false);
+            if (aboveEffectRoot && transform.parent) aboveEffectRoot.SetParent(transform.parent, false);
             RefreshEffects();
         }
 
         private void SyncEffects()
         {
-            if (syncing || !this) return;
+            if (syncing || generatingMesh || !this) return;
+            if (!cachedObject) cachedObject = gameObject;
             syncing = true;
+            effectsDirty = false;
             try
             {
                 // Keep render-only clones in sync with animated material properties.
-                if (faceSource && faceMaterial) FaceOnly(faceSource, ref faceMaterial, faceStencil);
+                if (faceSource && faceMaterial) FaceOnly(faceSource, ref faceMaterial, ref faceEntry, faceStencil);
                 for (int i = 1; i < m_subTextObjects.Length; i++)
                 {
                     var sub = m_subTextObjects[i];
@@ -227,6 +352,7 @@ namespace SDFUI
 
                 bool visible = !meshCleared && isActiveAndEnabled && HasEffects && EffectsSupported && canvas
                     && transform.parent && textInfo != null && textInfo.characterCount > 0;
+                effectsVisible = visible;
                 if (!visible)
                 {
                     ClearEffects();
@@ -234,12 +360,44 @@ namespace SDFUI
                 }
                 if (!effectShader) effectShader = Resources.Load<Shader>("SDFTextEffect");
                 if (!effectShader) return;
-                EnsureRoot();
-                SyncTransform();
-                effectRoot.gameObject.SetActive(true);
+                const AdditionalCanvasShaderChannels channels = AdditionalCanvasShaderChannels.TexCoord1 |
+                    AdditionalCanvasShaderChannels.TexCoord2 | AdditionalCanvasShaderChannels.TexCoord3 |
+                    AdditionalCanvasShaderChannels.Normal | AdditionalCanvasShaderChannels.Tangent;
+                if ((canvas.additionalShaderChannels & channels) != channels)
+                    canvas.additionalShaderChannels |= channels;
+                EnsureRoot(ref effectRoot, ref effectGroup, "SDF Text Effects");
+                EnsureRoot(ref aboveEffectRoot, ref aboveEffectGroup, "SDF Text Effects (Above)");
+                GetComponents(ownGroups);
+                SyncTransform(effectRoot, effectGroup, false);
+                SyncTransform(aboveEffectRoot, aboveEffectGroup, true);
 
                 int count = textInfo.materialCount;
                 int layerCount = sdfLayers.Count;
+                if (count == 1)
+                {
+                    // A single atlas can merge all effects on each side without changing
+                    // layer order. Multi-atlas text keeps ordered graphics across fonts.
+                    int used = 0;
+                    Mesh renderedMesh = canvasRenderer.GetMesh();
+                    bool active = textInfo.meshInfo[0].vertexCount > 0 && IsDistanceField(fontSharedMaterial);
+                    for (int side = 0; side < 2; side++)
+                    {
+                        bool above = side == 1, any = false;
+                        foreach (var style in sdfLayers)
+                            if (style != null && style.IsVisible && style.DrawAboveText == above) { any = true; break; }
+                        if (!any) continue;
+                        if (effectLayers.Count <= used) effectLayers.Add(CreateLayer("Effects"));
+                        var layer = effectLayers[used++];
+                        var root = above ? aboveEffectRoot : effectRoot;
+                        if (layer.transform.parent != root) layer.transform.SetParent(root, false);
+                        if (layer.transform.GetSiblingIndex() != 0) layer.transform.SetSiblingIndex(0);
+                        layer.Configure(this, renderedMesh, fontSharedMaterial, effectShader,
+                            null, true, above, active, geometryVersion);
+                    }
+                    for (int i = used; i < effectLayers.Count; i++) effectLayers[i].Clear();
+                    SyncClipping();
+                    return;
+                }
                 while (effectLayers.Count < count * layerCount)
                     effectLayers.Add(CreateLayer("Effect"));
 
@@ -256,26 +414,98 @@ namespace SDFUI
                     {
                         var style = sdfLayers[layerIndex];
                         var layer = effectLayers[layerIndex * count + i];
-                        layer.Configure(this, renderedMesh, source, effectShader,
-                            style?.Color ?? Color.clear, style?.Width ?? 0, style?.Softness ?? 0,
-                            style?.Offset ?? Vector2.zero, active && style != null && style.IsVisible);
+                        var root = style != null && style.DrawAboveText ? aboveEffectRoot : effectRoot;
+                        if (layer.transform.parent != root) layer.transform.SetParent(root, false);
+                        layer.Configure(this, renderedMesh, source, effectShader, style, false,
+                            style != null && style.DrawAboveText, active && style != null && style.IsVisible, geometryVersion);
                     }
                 }
-                // Group by style across every fallback material: the last list item is behind
-                // the first. Every effect remains behind the complete native face hierarchy.
-                int sibling = 0;
+                // Keep list order across every fallback material, separately on each side
+                // of the complete native face hierarchy. Index zero is frontmost in its group.
+                int belowSibling = 0, aboveSibling = 0;
                 for (int layerIndex = layerCount - 1; layerIndex >= 0; layerIndex--)
                     for (int i = 0; i < count; i++)
-                        effectLayers[layerIndex * count + i].transform.SetSiblingIndex(sibling++);
+                    {
+                        var layerTransform = effectLayers[layerIndex * count + i].transform;
+                        int sibling = sdfLayers[layerIndex] != null && sdfLayers[layerIndex].DrawAboveText
+                            ? aboveSibling++ : belowSibling++;
+                        if (layerTransform.GetSiblingIndex() != sibling) layerTransform.SetSiblingIndex(sibling);
+                    }
                 for (int i = count * layerCount; i < effectLayers.Count; i++) effectLayers[i].Clear();
-                // Fallback layers may first appear after the Canvas clipping phase.
-                if (CanvasUpdateRegistry.IsRebuildingGraphics())
-                {
-                    effectRoot.GetComponentsInParent(false, clipMasks);
-                    foreach (var mask in clipMasks) if (mask.isActiveAndEnabled) mask.PerformClipping();
-                }
+                SyncClipping();
             }
-            finally { syncing = false; }
+            finally
+            {
+                lastMaterialRevision = SdfTextMaterials.Revision;
+                lastComponentCount = cachedObject.GetComponentCount();
+                if (effectsVisible)
+                {
+                    lastTransform = rectTransform.localToWorldMatrix;
+                    lastRendererColor = canvasRenderer.GetColor();
+                    lastLayer = cachedObject.layer;
+                    lastSibling = transform.GetSiblingIndex();
+                }
+                syncing = false;
+            }
+        }
+
+        private void CheckEffects()
+        {
+            if (syncing || generatingMesh || !isActiveAndEnabled) return;
+            // A component count check catches masks / CanvasGroups added at runtime
+            // without repeating GetComponent searches for every unchanged label.
+            if (effectsDirty || lastComponentCount != cachedObject.GetComponentCount()) { SyncEffects(); return; }
+            if (lastMaterialRevision != SdfTextMaterials.Revision)
+            {
+                if (faceEntry != null && !faceEntry.material)
+                {
+                    // Entering Play Mode with domain/scene reload disabled can reset the
+                    // shared cache while these labels and their native renderers survive.
+                    RefreshEffects();
+                    for (int i = 1; i < m_subTextObjects.Length; i++)
+                        if (m_subTextObjects[i]) m_subTextObjects[i].SetMaterialDirty();
+                    SyncEffects();
+                    return;
+                }
+                foreach (var layer in effectLayers) if (layer) layer.RefreshSharedMaterial();
+                lastMaterialRevision = SdfTextMaterials.Revision;
+            }
+            if (!effectsVisible) return;
+            if (!effectRoot || !aboveEffectRoot || !lastTransform.Equals(rectTransform.localToWorldMatrix) ||
+                lastLayer != cachedObject.layer || lastSibling != rectTransform.GetSiblingIndex() ||
+                effectRoot.GetSiblingIndex() != lastSibling - 1 || aboveEffectRoot.GetSiblingIndex() != lastSibling + 1)
+            {
+                SyncEffects();
+                return;
+            }
+            Color rendererColor = canvasRenderer.GetColor();
+            if (!lastRendererColor.Equals(rendererColor))
+            {
+                foreach (var layer in effectLayers) if (layer) layer.SyncColor(rendererColor);
+                lastRendererColor = rendererColor;
+            }
+            SyncGroups();
+        }
+
+        private void SyncGroups()
+        {
+            float alpha = 1;
+            bool ignoreParents = false;
+            foreach (var group in ownGroups)
+                if (group && group.isActiveAndEnabled) { alpha *= group.alpha; ignoreParents |= group.ignoreParentGroups; }
+            if (lastGroupAlpha == alpha && lastIgnoreGroups == ignoreParents) return;
+            lastGroupAlpha = alpha;
+            lastIgnoreGroups = ignoreParents;
+            if (effectGroup) { effectGroup.alpha = alpha; effectGroup.ignoreParentGroups = ignoreParents; }
+            if (aboveEffectGroup) { aboveEffectGroup.alpha = alpha; aboveEffectGroup.ignoreParentGroups = ignoreParents; }
+        }
+
+        private void SyncClipping()
+        {
+            // Fallback layers may first appear after the Canvas clipping phase.
+            if (!CanvasUpdateRegistry.IsRebuildingGraphics()) return;
+            effectRoot.GetComponentsInParent(false, clipMasks);
+            foreach (var mask in clipMasks) if (mask.isActiveAndEnabled) mask.PerformClipping();
         }
 
         private void ClearEffects()
@@ -283,6 +513,17 @@ namespace SDFUI
             // TMP may clear text during a Canvas rebuild. Unbinding meshes is safe there;
             // disabling Graphics would unregister them from the active rebuild queue.
             foreach (var layer in effectLayers) if (layer) layer.Clear();
+        }
+
+        private void SyncScale()
+        {
+            // TMP can update UV0.w directly during willRenderCanvases, without calling
+            // UpdateGeometry. Upload that scale change after TMP's own callback has run.
+            float scale = rectTransform.lossyScale.y;
+            if (lastLossyScaleY == scale) return;
+            lastLossyScaleY = scale;
+            geometryVersion++;
+            SyncEffects();
         }
 
         private SdfTextEffect LegacyLayer(SdfTextEffectRole role, bool create)
@@ -392,10 +633,10 @@ namespace SDFUI
             if (!sdfOutlineColor.Equals(sdfLegacyOutlineColor)) outline.Color = sdfOutlineColor;
         }
 
-        private void EnsureRoot()
+        private void EnsureRoot(ref RectTransform effectRoot, ref CanvasGroup effectGroup, string name)
         {
             if (effectRoot) return;
-            var root = new GameObject("SDF Text Effects", typeof(RectTransform), typeof(LayoutElement), typeof(CanvasGroup));
+            var root = new GameObject(name, typeof(RectTransform), typeof(LayoutElement), typeof(CanvasGroup));
             root.hideFlags = HideFlags.HideInHierarchy | HideFlags.DontSave;
             effectRoot = (RectTransform)root.transform;
             effectRoot.SetParent(transform.parent, false);
@@ -404,7 +645,7 @@ namespace SDFUI
             effectGroup.blocksRaycasts = false;
             effectGroup.interactable = false;
             // The sibling may have been destroyed together with an old parent.
-            effectLayers.Clear();
+            effectLayers.RemoveAll(layer => !layer);
         }
 
         private SdfTextLayer CreateLayer(string layerName)
@@ -415,7 +656,7 @@ namespace SDFUI
             return child.AddComponent<SdfTextLayer>();
         }
 
-        private void SyncTransform()
+        private void SyncTransform(RectTransform effectRoot, CanvasGroup effectGroup, bool aboveText)
         {
             if (effectRoot.parent != transform.parent) effectRoot.SetParent(transform.parent, false);
             var source = rectTransform;
@@ -428,16 +669,18 @@ namespace SDFUI
             effectRoot.localScale = source.localScale;
             effectRoot.gameObject.layer = gameObject.layer;
             int sourceIndex = transform.GetSiblingIndex(), rootIndex = effectRoot.GetSiblingIndex();
-            int targetIndex = rootIndex < sourceIndex ? sourceIndex - 1 : sourceIndex;
+            int targetIndex = aboveText
+                ? (rootIndex < sourceIndex ? sourceIndex : sourceIndex + 1)
+                : (rootIndex < sourceIndex ? sourceIndex - 1 : sourceIndex);
             if (rootIndex != targetIndex) effectRoot.SetSiblingIndex(targetIndex);
 
-            GetComponents(ownGroups);
             float alpha = 1;
             bool ignoreParents = false;
             foreach (var group in ownGroups)
                 if (group.isActiveAndEnabled) { alpha *= group.alpha; ignoreParents |= group.ignoreParentGroups; }
             effectGroup.alpha = alpha;
             effectGroup.ignoreParentGroups = ignoreParents;
+            effectRoot.gameObject.SetActive(true);
         }
 
         internal static bool IsDistanceField(Material value) => value && value.HasProperty("_GradientScale")
@@ -446,22 +689,11 @@ namespace SDFUI
         private static float AtlasPadding(Material value) => IsDistanceField(value)
             ? Mathf.Max(0, value.GetFloat("_GradientScale") - 1) : 0;
 
-        internal static Material FaceOnly(Material source, ref Material instance, Material stencil = null)
+        internal static Material FaceOnly(Material source, ref Material instance, ref SdfTextMaterials.Entry entry, Material stencil = null)
         {
-            if (!instance || instance.shader != source.shader)
-            {
-                Release(instance);
-                instance = new Material(source) { name = "SDF Text Face", hideFlags = HideFlags.HideAndDontSave | HideFlags.HideInInspector };
-            }
-            // Also cover a render copy retained by Editor hot reload from an older version.
-            if ((instance.hideFlags & HideFlags.HideInInspector) == 0) instance.hideFlags |= HideFlags.HideInInspector;
-            CopyRenderProperties(source, instance, stencil);
-            instance.SetFloat("_OutlineWidth", 0);
-            instance.SetFloat("_OutlineSoftness", 0);
-            instance.DisableKeyword("OUTLINE_ON");
-            instance.DisableKeyword("UNDERLAY_ON");
-            instance.DisableKeyword("UNDERLAY_INNER");
-            instance.DisableKeyword("GLOW_ON");
+            // Release an owned copy left by a hot reload from the older implementation.
+            if (entry == null && instance) Release(instance);
+            instance = SdfTextMaterials.Face(source, stencil, ref entry);
             return instance;
         }
 
