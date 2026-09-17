@@ -1,5 +1,27 @@
 # Validation
 
+## 0.9.0 — SDF Outline and image material batching (2026-09-17)
+
+Validated through a local UPM installation in an isolated Unity **6000.0.83f1** project. Runtime image sources were hash-checked against the completed Windows benchmark; release metadata, demo menu and documentation were then updated. Unrelated development scenes, project settings and user assets are excluded.
+
+| Check | Result |
+| --- | --- |
+| Built-in pipeline, Gamma | **161 / 161 EditMode tests passed**, zero skipped, 34.303 s |
+| URP 17.0.4, Linear | **161 / 161 EditMode tests passed**, zero skipped, 35.429 s |
+| Android Image/Text shader bundle, Vulkan and OpenGL ES 3 | **Passed**, fresh strict shader bundle build |
+| Windows Player script compilation | **18 runtime assemblies**, including SDFUI and TMP; no package Editor/test assemblies |
+| Windows Development Player image benchmark | **Built and completed**, no runtime exceptions; unchanged runtime sources verified by hash |
+| Before/after image rendering | **8 / 8 PNG captures have identical SHA-256 hashes** |
+| README illustrations | **5 Unity URP/Linear renders visually reviewed**, including the new text mode guide |
+
+Seven additional image test cases cover compatible material sharing, independent style changes and rejoining, texture/drawing/slicing separation, masked siblings, last-owner release, and warmed animated groups with zero managed allocations. Existing text, rendering, import, sample and GUID/icon checks remain active.
+
+With 100 matching non-overlapping images, draws fell from **100 to 1**; four styles use **4** draws and one shared stencil Mask uses **3**. Animating Width on all images reduced property updates plus the first Canvas cycle from **2.7129 to 1.3416 ms**. This is not GPU time or whole-frame CPU. See the [image performance report and raw measurements](Documentation~/Performance-0.9.0.md).
+
+Reports: [Built-in Gamma](Documentation~/Tests-0.9.0-Builtin.xml), [URP Linear](Documentation~/Tests-0.9.0-URP-Linear.xml). Build, capture and benchmark logs remain in the development project's ignored `Build` directory. Earlier release reports below are historical evidence.
+
+No complete APK/iOS player build, mobile device run, GPU timing, thermal or battery profile was performed. Fewer draws do not remove per-layer shader/geometry costs. Automated Inspector and integration checks do not establish mouse-driven interaction coverage.
+
 ## 0.8.0 — text layer modes, batching and idle CPU (2026-09-17)
 
 Validated the release sources through a local UPM installation in the isolated Unity **6000.0.83f1** fixture. The development scene, project settings and unrelated assets are excluded from this package release.

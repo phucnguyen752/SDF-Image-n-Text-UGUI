@@ -29,7 +29,10 @@ namespace SDFUI
         [SerializeField, HideInInspector, Min(0)] private float shadowBlur = 3;
         [SerializeField, HideInInspector] private float shadowSpread;
 
-        private Material ownedMaterial;
+        private SdfImageMaterials.Entry materialEntry;
+        private readonly Vector4[] materialProperties = new Vector4[SdfImageMaterials.PropertyCount];
+        private bool materialPropertiesDirty = true;
+        private ColorSpace materialColorSpace;
         private static Shader sdfShader;
         private UnityEngine.Sprite resolvedSource;
         private bool sourceResolved;
@@ -118,6 +121,7 @@ namespace SDFUI
 
         public override void SetVerticesDirty()
         {
+            materialPropertiesDirty = true;
             ResolveSource(false);
             base.SetVerticesDirty();
             // Image skips material dirtiness for sprites sharing a texture, but their SDFs are different.
@@ -126,11 +130,12 @@ namespace SDFUI
 
         public override void SetMaterialDirty()
         {
+            materialPropertiesDirty = true;
             ResolveSource(false);
             base.SetMaterialDirty();
         }
 
-        // Every image owns its material. uGUI stencil derivatives can therefore be updated safely.
+        // Compatible images share a render state; style changes detach a shared owner.
         public override Material material
         {
             get { ResolveSource(false); return UsesSdf ? GetSdfMaterial() : base.material; }
@@ -149,30 +154,28 @@ namespace SDFUI
             {
                 var result = base.materialForRendering;
                 if (!UsesSdf) return result;
-                ApplyProperties(result);
+                materialEntry?.ApplyStencil(result);
                 // A Mask creates its stencil/pop materials after this Graphic's modifier.
                 for (var i = 0; i < canvasRenderer.popMaterialCount; i++)
-                    ApplyProperties(canvasRenderer.GetPopMaterial(i));
+                    materialEntry?.ApplyStencil(canvasRenderer.GetPopMaterial(i));
                 return result;
             }
         }
 
         private Material GetSdfMaterial()
         {
-            if (ownedMaterial)
-            {
-                ApplyProperties(ownedMaterial);
-                return ownedMaterial;
-            }
             if (!sdfShader) sdfShader = Resources.Load<Shader>("SDFImage");
             if (!sdfShader) return null;
-            ownedMaterial = new Material(sdfShader)
+            if (materialPropertiesDirty || materialColorSpace != QualitySettings.activeColorSpace
+                || materialEntry == null || !materialEntry.material)
             {
-                name = "SDF Image (Instance)",
-                hideFlags = HideFlags.HideAndDontSave | HideFlags.HideInInspector
-            };
-            ApplyProperties(ownedMaterial);
-            return ownedMaterial;
+                int count = PrepareMaterialProperties();
+                SdfImageMaterials.Acquire(sdfShader, bakedSprite.ColorTexture, bakedSprite.DistanceTexture,
+                    materialProperties, count, layerSizes, layerColors, layerModes, ref materialEntry);
+                materialColorSpace = QualitySettings.activeColorSpace;
+                materialPropertiesDirty = false;
+            }
+            return materialEntry.material;
         }
 
         protected override void OnEnable()
@@ -190,10 +193,8 @@ namespace SDFUI
         {
             UnityEngine.UI.StencilMaterial.Remove(m_MaskMaterial);
             m_MaskMaterial = null;
-            if (!ownedMaterial) return;
-            if (Application.isPlaying) Destroy(ownedMaterial);
-            else DestroyImmediate(ownedMaterial);
-            ownedMaterial = null;
+            SdfImageMaterials.Release(ref materialEntry);
+            materialPropertiesDirty = true;
         }
 
         protected override void OnDisable()
@@ -392,28 +393,23 @@ namespace SDFUI
             vertices.AddTriangle(2, 3, 0);
         }
 
-        private void ApplyProperties(Material target)
+        private int PrepareMaterialProperties()
         {
-            if (!target || !target.HasProperty("_SdfTex")) return;
-            target.SetFloat("_HasSprite", HasSprite ? 1 : 0);
-            if (!HasSprite) return;
             var rect = DrawingRect();
             var border = LocalBorder(rect);
             var settings = EffectSettings(rect, border);
-            target.SetTexture("_MainTex", bakedSprite.ColorTexture);
-            target.SetTexture("_SdfTex", bakedSprite.DistanceTexture);
             Vector2 decode = bakedSprite.DistanceDecode;
-            target.SetVector("_SdfDecode", new Vector4(decode.x, decode.y, 0, 0));
-            target.SetVector("_SourceSize", new Vector4(bakedSprite.SourceSize.x, bakedSprite.SourceSize.y, bakedSprite.Padding, bakedSprite.DistanceRange));
-            target.SetVector("_ImageRect", new Vector4(rect.x, rect.y, Mathf.Max(0.0001f, rect.width), Mathf.Max(0.0001f, rect.height)));
-            target.SetVector("_SourceBorder", ImageType == SdfImageType.Sliced ? bakedSprite.Border : Vector4.zero);
-            target.SetVector("_LocalBorder", border);
-            ApplyLayers(target, rect, border);
-            target.SetVector("_Outline", new Vector4(settings.x, settings.y, (float)OutlinePosition, 0));
-            target.SetColor("_OutlineColor", OutlineEnabled ? OutlineColor : Color.clear);
-            target.SetVector("_OutlineTextureColor", new Vector4(OutlineUseTextureColor ? 1 : 0, OutlineTextureColorIntensity, 0, 0));
-            target.SetColor("_ShadowColor", ShadowEnabled ? ShadowColor : Color.clear);
-            target.SetVector("_Shadow", new Vector4(ShadowOffset.x, ShadowOffset.y, settings.z, settings.w));
+            materialProperties[0] = new Vector4(decode.x, decode.y, 0, 0);
+            materialProperties[1] = new Vector4(bakedSprite.SourceSize.x, bakedSprite.SourceSize.y, bakedSprite.Padding, bakedSprite.DistanceRange);
+            materialProperties[2] = new Vector4(rect.x, rect.y, Mathf.Max(0.0001f, rect.width), Mathf.Max(0.0001f, rect.height));
+            materialProperties[3] = ImageType == SdfImageType.Sliced ? bakedSprite.Border : Vector4.zero;
+            materialProperties[4] = border;
+            materialProperties[5] = new Vector4(settings.x, settings.y, (float)OutlinePosition, 0);
+            materialProperties[6] = OutlineEnabled ? OutlineColor : Color.clear;
+            materialProperties[7] = new Vector4(OutlineUseTextureColor ? 1 : 0, OutlineTextureColorIntensity, 0, 0);
+            materialProperties[8] = new Vector4(ShadowOffset.x, ShadowOffset.y, settings.z, settings.w);
+            materialProperties[9] = ShadowEnabled ? ShadowColor : Color.clear;
+            return PrepareLayers(rect, border);
         }
 
         public override bool Raycast(Vector2 screenPoint, Camera eventCamera)

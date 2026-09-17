@@ -14,10 +14,6 @@ namespace SDFUI
         private readonly Vector4[] layerSizes = new Vector4[MaxEffectLayers];
         private readonly Vector4[] layerColors = new Vector4[MaxEffectLayers];
         private readonly Vector4[] layerModes = new Vector4[MaxEffectLayers];
-        private static readonly int LayerCountId = Shader.PropertyToID("_LayerCount");
-        private static readonly int LayerSizesId = Shader.PropertyToID("_LayerSizes");
-        private static readonly int LayerColorsId = Shader.PropertyToID("_LayerColors");
-        private static readonly int LayerModesId = Shader.PropertyToID("_LayerModes");
 
         public bool EffectsEnabled { get => sdfEffectsEnabled; set { if (sdfEffectsEnabled == value) return; sdfEffectsEnabled = value; RefreshEffects(); } }
         /// <summary>Frontmost effect first, up to MaxEffectLayers. Call RefreshEffects after editing entries or order.</summary>
@@ -149,7 +145,7 @@ namespace SDFUI
             return new Vector4(Finite(layer.Offset.x), Finite(layer.Offset.y), spread, softness);
         }
 
-        private void ApplyLayers(Material target, Rect rect, Vector4 border)
+        private int PrepareLayers(Rect rect, Vector4 border)
         {
             int count = 0;
             float budget = EffectBudget(rect, border);
@@ -166,10 +162,7 @@ namespace SDFUI
                         Positive(layer.TextureColorIntensity), 0);
                     count++;
                 }
-            target.SetInt(LayerCountId, count);
-            target.SetVectorArray(LayerSizesId, layerSizes);
-            target.SetVectorArray(LayerColorsId, layerColors);
-            target.SetVectorArray(LayerModesId, layerModes);
+            return count;
         }
     }
 }

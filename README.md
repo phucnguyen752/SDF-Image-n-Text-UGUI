@@ -1,60 +1,92 @@
-# SDF Image
+# SDF Outline
 
-Unity 6 / uGUI outlines and soft shadows for sprites and TextMeshPro labels. Sprite SDF baking runs asynchronously and stays embedded in the source sprites.
+Layered outlines, shadows and glow for **Unity 6 / uGUI** sprites and **TextMeshPro** labels.
 
-## Install
+Use **SDF Image** for sprites and **SDF Text** for editable text. Both expose a reorderable **Layers** list. Sprite baking runs asynchronously in the Editor; text uses the existing TMP font atlas.
 
-In Unity Package Manager, choose **Install package from Git URL**:
+![SDF Image: outline positions, soft shadow, glow, nine-slice and clipping, rendered in Unity](Assets/SDFImage/Documentation~/sdf-outline-demo.png)
+
+## Install or update
+
+Requires **Unity 6000.0+** and **uGUI 2.0.0** (includes TextMeshPro). In **Window → Package Manager**, choose **Install package from Git URL**:
 
 ```text
 https://github.com/phucnguyen752/sdf-image.git#upm
 ```
 
-This URL follows the `upm` branch. After a new release, select **SDF Image** in Package Manager and click **Update**; keep the same URL. If you installed a version tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
+Select **SDF Outline → Update** for later releases. An older installation may still appear as **SDF Image** until updated. The library name changed in **0.9.0**; the package ID `com.sdfimage.ugui`, component names, script GUIDs and installation URL are unchanged.
 
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.8.0` instead. Updating a pinned tag does not switch to a newer release tag.
+For a pinned version, use `https://github.com/phucnguyen752/sdf-image.git#0.9.0`. A pinned tag does not advance to a new release when you click Update; reinstall once with `#upm` to follow releases. Keep the suffix: `main` is the development project, while `upm` and version tags have the package at their root.
 
-Requires Unity 6000.0 and uGUI 2.0.0. The version tag and `upm` branch contain the package at the repository root. The `main` branch contains the Unity development project, with the library in `Assets/SDFImage`.
+## SDF Image: start with a sprite
 
-## Use
+1. Create **GameObject → UI → SDF Image** and assign **Source Image**.
+2. Click **Generate SDF** if needed. The original sprite remains visible while baking.
+3. Open **SDF Effects → Layers**. Add effects with **+**, drag to reorder, and use each layer's checkbox to toggle it. The top entry draws in front.
+4. Choose **Outer**, **Inner**, **Center** or **Underlay**; adjust **Color**, **Width/Spread**, **Softness** and **Offset**.
 
-Create **GameObject → UI → SDF Image**, assign a source sprite, then select **Generate SDF** if needed. Edit **SDF Effects → Layers** for up to 16 outlines, shadows and glows with independent color, width, softness and offset. Drag layers to reorder them; the top layer is in front. Use **Underlay** for an offset shadow or glow. New images use one component derived from Unity Image, with all layers composed in one quad/material draw.
+Up to **16 layers** are composed in one quad. Use Underlay for an offset shadow or a soft glow. Standard Image tint, alpha, Simple/Sliced, preserve aspect, masks and CanvasGroup remain available. Editing effects does not rebake the sprite.
 
-![SDF Outline overview: outer, inner and center outlines, shadow, glow, nine-slice and RectMask2D](Assets/SDFImage/Documentation~/sdf-outline-demo.png)
+Enable **Use Texture Color** to follow the artwork's edge colors. **Intensity** changes brightness (`0` black, `1` original, above `1` brighter); **Opacity** changes transparency.
 
-Enable **Use Texture Color** on a layer to color its effect from the sprite texture. **Intensity** controls brightness (`0` black, `1` original, above `1` brighter), while **Opacity** controls transparency. Editing effect layers does not rebake the sprite.
+![Texture-colored effects on a gradient star, hollow ring and sliced panel](Assets/SDFImage/Documentation~/sdf-outline-texture-color-demo.png)
 
-![Use Texture Color: gradient star, hollow ring and nine-sliced panel rendered in Unity URP](Assets/SDFImage/Documentation~/sdf-outline-texture-color-demo.png)
+Bake settings belong to the source texture. Select it and choose **SDF → Open SDF Import Settings** for Auto Update, Padding, Distance Range and platform compression. Generated color/distance textures stay embedded in the source asset; baking does not run in a player. [Full image and bake guide →](Assets/SDFImage/README.md#sdf-image-quick-start)
 
-Select the source texture and open **SDF → Open SDF Import Settings** to edit bake settings and Unity's native platform compression controls. Distance maps use a single compressed channel and are padded to power-of-two dimensions without shrinking the artwork. Disable **Compress Distance** to retain full-precision RHalf data. **Clear SDF** removes generated data while preserving the source sprite and saved settings.
+## SDF Text: start with a TMP font
 
-For text, create **GameObject → UI → SDF Text**, assign a TMP SDF font, and enable **Effects Enabled** below the standard TMP Inspector. `SdfText` derives from `TextMeshProUGUI`. Each layer's **Position** supports **Outer**, **Inner**, **Center** and **Underlay**. Inner draws an inset border over the glyph edge while keeping the stroke center visible; Center straddles the edge. Text remains editable at runtime and uses the existing font atlas; no sprite bake is needed. Font atlas padding limits effect width and softness.
+1. Create **GameObject → UI → SDF Text**.
+2. Assign a **TMP SDF font** and edit content, size and alignment as usual. Import TMP Essential Resources if Unity prompts for them.
+3. Enable **SDF Effects → Effects Enabled** and edit **Layers** below the standard TMP Inspector. No sprite bake is needed.
 
-Use one **Layers** list for outlines, shadows and glow, with independent position, color, width/spread, softness and offset. Existing and new layers default to **Underlay / Normal**, preserving the filled effect with signed spread. Choose Inner, Outer or Center for a border with positive Width. Underlay has **Underlay Type: Normal / Inner**: Normal draws behind the text; Inner casts a shadow inside the original glyph mask. Inner and Center borders also render over the text; Outer renders below it. Drag to reorder: within each group, the top list entry (lowest index) draws in front. Each active layer adds rendering cost for each font material in use.
+| Layer setting | Result | Relative to the text face |
+| --- | --- | --- |
+| Outer | Border outside the glyph | Below |
+| Inner | Border inside the glyph, clipped to its original shape | Above |
+| Center | Border straddling the glyph edge | Above |
+| Underlay → Normal | Filled silhouette for shadows or glow | Below |
+| Underlay → Inner | Shadow clipped inside the original glyph, including holes | Above |
 
-Outer draws an exterior ring; Normal underlay includes the filled silhouette behind the text. Both Inner borders and Inner underlays stay masked by the original glyph, including holes, even with Offset and Softness. For Inner underlay, positive Spread reduces the shadow and negative Spread grows it.
+![Text position guide: Outer, Inner, Center, Normal underlay and Inner underlay rendered in Unity](Assets/SDFImage/Documentation~/sdf-text-modes-guide.png)
 
-SDF Text shares cached face/effect materials even across different layer styles. For a single font atlas, effects merge into one mesh per side of the text, preserving whole-layer order; compatible labels typically use two draws with effects on one side, or three with effects on both sides. Meshes update when geometry, TMP scale or style changes. Different font presets, atlases, Canvases, clipping and overlapping order can still split batches. Extra vertex data trades memory/bandwidth for fewer draws; profile the target device. Configure styles through the font preset and Layers, not the shared render material.
+Within each above/below group, the **top layer (lowest index) is in front**. Inner borders and Inner underlays stay inside the original glyph mask when offset or softened. New text layers default to **Underlay / Normal**. Borders use positive Width; Underlay uses signed Spread. Disable a layer to hide it: zero Spread still renders a Normal underlay.
 
-Static text skips full effect synchronization until it becomes dirty. Lightweight checks preserve transform/order and fades, while source materials are watched once per shared material. Call `RefreshEffects()` after editing the `Layers` list from code.
+![Layered text: stacked borders, an offset shadow and layer ordering](Assets/SDFImage/Documentation~/sdf-text-layers-demo.png)
 
-See the [0.8.0 performance comparison with TMP](Assets/SDFImage/Documentation~/Performance-0.8.0.md) for measured CPU, draw calls and memory tradeoffs.
+Text remains editable through `text`, `SetText` and the usual TMP APIs. After changing the `Layers` list from code, call **`RefreshEffects()`** on either component. Render materials are shared; configure the components, layers and font presets rather than editing temporary render materials. [Full text guide and API →](Assets/SDFImage/README.md#sdf-text-quick-start)
 
-![SDF Text Layers: stacked outlines, an offset shadow and reordered colors rendered in Unity URP](Assets/SDFImage/Documentation~/sdf-text-layers-demo.png)
+## Performance
 
-Zero spread still renders an unexpanded Normal underlay, including migrated outlines that previously used width zero to hide. Inner underlay spread zero can still cast a shadow through Offset and Softness. Turn off the layer to hide it. Outer, Inner and Center borders are hidden at width zero.
+**SDF Image** shares materials between images with matching baked textures, local drawing rectangle, slice mapping and effects. Position and Graphic tint/alpha can differ. Static images add no per-frame synchronization callback; material properties update when dirty. Different sprites, dimensions/pivots, styles, masks and draw order can still split batches. This is not a cross-sprite atlas.
 
-Softness `0` still uses antialiasing. Enlarging low-resolution glyphs can leave rough contours; regenerate the font at a higher sampling size, with enough atlas space and padding for large labels and thick effects.
+Measured with **100 non-overlapping images**, one Canvas, Windows Development Player / URP:
 
-For an existing TMP label, create an **SDF Text** label and assign its font, content and layout settings, then update references to the new component. Automatic component conversion is not provided.
+| Scenario | Before 0.9.0 | 0.9.0 |
+| --- | ---: | ---: |
+| Same sprite, size and effects | 100 draws | **1 draw** |
+| Four effect styles | 100 draws | **4 draws** |
+| One shared stencil Mask | 102 draws | **3 draws** |
+| Width animated on all 100 images: update + first Canvas cycle | 2.7129 ms | **1.3416 ms** |
 
-![SDF Text: tight spacing, colored outline and soft glow rendered in Unity URP](Assets/SDFImage/Documentation~/sdf-text-demo.png)
+**SDF Text** shares face/effect materials and merges layers into one effect mesh per side of the text. Compatible labels with one font atlas typically use **2 draws** with effects on one side, or **3** on both sides. Static text skips full effect synchronization until dirty. Presets, atlases, masks, Canvases and overlapping order can split batches.
 
-- [Usage, API, and limitations](Assets/SDFImage/README.md)
+Fewer draws do not remove shader work or overdraw. Text effects still add glyph geometry and vertex data; image layers add texture samples. These measurements are from desktop, **not Android/iOS device results**. See the [image benchmark and method](Assets/SDFImage/Documentation~/Performance-0.9.0.md) and [text comparison with TMP](Assets/SDFImage/Documentation~/Performance-0.8.0.md).
+
+## Practical limits
+
+- **Image:** Simple and Sliced with Fill Center enabled. Filled, Tiled and Sliced without Fill Center fall back to standard Image rendering.
+- **Text:** Canvas-based `TextMeshProUGUI` with an SDF atlas. World-space 3D `TextMeshPro` and non-SDF custom font shaders are not supported.
+- **Effect range:** increase sprite bake Padding/Distance Range or regenerate the TMP font atlas with more padding if effects stop expanding. Softness cannot restore detail missing from a low-resolution source.
+- **Masks:** `Mask`, `RectMask2D` and CanvasGroup are supported. For SDF Text, keep Canvas/Mask/RectMask2D on ancestors, not on the text object itself.
+- **Color:** lossy texture compression can change baked sprite colors. Choose uncompressed color storage when exact matching matters. Text is limited by its font atlas and material preset.
+
+## Samples and documentation
+
+Import **Outline and Shadow Demo** from the package's **Samples** tab, or run **Tools → SDF Outline → Create Demo Prefab**. The latter creates assets in `Assets/SDFImageDemo` without changing the open scene.
+
+- [Complete usage, API and troubleshooting](Assets/SDFImage/README.md)
 - [Validation results](Assets/SDFImage/VALIDATION.md)
 - [Changelog](Assets/SDFImage/CHANGELOG.md)
 - [Release workflow](Assets/SDFImage/Documentation~/Publishing.md)
 
-## Development
-
-Open this project with Unity **6000.0.83f1**. Run the `SDFUI.Tests` EditMode suite in Test Runner. Keep all library `.meta` files when moving or updating the package so existing components and sprites retain their identities.
+All examples shown above are rendered by Unity. Development uses **Unity 6000.0.83f1** and **URP 17.0.4**. Run the `SDFUI.Tests` EditMode suite in Test Runner; keep library `.meta` files when moving or updating the package.

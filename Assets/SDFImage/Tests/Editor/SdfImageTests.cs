@@ -282,6 +282,139 @@ namespace SDFUI.Tests
         }
 
         [Test]
+        public void CompatibleImages_ShareMaterialDespitePositionAndGraphicTint_AndReleaseLastOwner()
+        {
+            var first = CreateImage("First shared");
+            var second = CreateImage("Second shared");
+            second.rectTransform.anchoredPosition = new Vector2(80, 20);
+            second.color = new Color(0.2f, 0.6f, 0.9f, 0.5f);
+            var shared = first.materialForRendering;
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            first.gameObject.SetActive(false);
+            Assert.That((bool)shared, Is.True, "Another visible owner must retain the material.");
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            first.gameObject.SetActive(true);
+            Assert.That(first.materialForRendering, Is.SameAs(shared));
+            first.gameObject.SetActive(false);
+            second.gameObject.SetActive(false);
+            Assert.That(!shared, Is.True, "The final owner must release the material.");
+        }
+
+        [Test]
+        public void SharedImageStyle_DetachesAndRejoinsWithoutChangingOtherOwners()
+        {
+            var first = CreateImage("Changing shared");
+            var second = CreateImage("Unchanged shared");
+            var shared = first.materialForRendering;
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            first.OutlineWidth = 7;
+            var changed = first.materialForRendering;
+            Assert.That(changed, Is.Not.SameAs(shared));
+            Assert.That(shared.GetVector("_Outline").x, Is.EqualTo(2));
+            Assert.That(changed.GetVector("_Outline").x, Is.EqualTo(7));
+            first.OutlineWidth = 2;
+            Assert.That(first.materialForRendering, Is.SameAs(shared));
+            first.Layers[0].Color = Color.green;
+            first.RefreshEffects();
+            Assert.That(first.materialForRendering, Is.Not.SameAs(shared));
+            Assert.That(second.materialForRendering.GetColor("_OutlineColor"), Is.EqualTo(Color.black));
+            first.gameObject.SetActive(false);
+            second.gameObject.SetActive(false);
+            Assert.That(!shared && !changed, Is.True, "All live and spare materials must be released with their owners.");
+        }
+
+        [Test]
+        public void MaterialSharing_SeparatesDrawingRectsSlicingAndTextures()
+        {
+            var first = CreateImage("Common source");
+            var second = CreateImage("Different mapping");
+            var shared = first.materialForRendering;
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            var size = second.rectTransform.sizeDelta;
+            second.rectTransform.sizeDelta = size + new Vector2(40, 10);
+            Assert.That(second.materialForRendering, Is.Not.SameAs(shared));
+            second.rectTransform.sizeDelta = size;
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            second.type = Image.Type.Sliced;
+            Assert.That(second.materialForRendering, Is.Not.SameAs(shared));
+            second.type = Image.Type.Simple;
+            Assert.That(second.materialForRendering, Is.SameAs(shared));
+            second.Sprite = CreateTemporarySdf();
+            Assert.That(second.materialForRendering, Is.Not.SameAs(shared));
+            Assert.That(first.materialForRendering.GetTexture("_SdfTex"), Is.SameAs(distanceTexture));
+        }
+
+        [Test]
+        public void SharedMaskedImages_KeepStencilAndSiblingStyleWhenOneChanges()
+        {
+            var maskObject = new GameObject("Shared mask", typeof(RectTransform), typeof(Image), typeof(Mask));
+            maskObject.transform.SetParent(canvasObject.transform, false);
+            var first = CreateImage("Masked first", maskObject.transform);
+            var second = CreateImage("Masked second", maskObject.transform);
+            var masked = first.materialForRendering;
+            Assert.That(second.materialForRendering, Is.SameAs(masked));
+            float stencil = masked.GetFloat("_Stencil");
+            Assert.That(stencil, Is.GreaterThan(0));
+            first.OutlineWidth = 8;
+            first.OutlineColor = Color.magenta;
+            var changed = first.materialForRendering;
+            Assert.That(changed, Is.Not.SameAs(masked));
+            Assert.That(changed.GetFloat("_Stencil"), Is.EqualTo(stencil));
+            Assert.That(changed.GetColor("_OutlineColor"), Is.EqualTo(Color.magenta));
+            Assert.That(second.materialForRendering.GetVector("_Outline").x, Is.EqualTo(2));
+            first.gameObject.SetActive(false);
+            Assert.That((bool)masked, Is.True);
+        }
+
+        [TestCase(1, false)]
+        [TestCase(5, false)]
+        [TestCase(1, true)]
+        public void SharedGroupAnimation_ReusesMaterialsWithoutManagedAllocationsAfterWarmup(int groups, bool masked)
+        {
+            Transform parent = canvasObject.transform;
+            if (masked)
+            {
+                var mask = new GameObject("Animated group mask", typeof(RectTransform), typeof(Image), typeof(Mask));
+                mask.transform.SetParent(parent, false);
+                parent = mask.transform;
+            }
+            var first = new SdfImage[groups];
+            var second = new SdfImage[groups];
+            var rendered = new Material[groups];
+            for (int i = 0; i < groups; i++)
+            {
+                first[i] = CreateImage("Animated first", parent);
+                second[i] = CreateImage("Animated second", parent);
+                first[i].OutlineColor = second[i].OutlineColor = Color.HSVToRGB(i / (float)groups, 1, 1);
+            }
+            void Apply(float width)
+            {
+                for (int i = 0; i < groups; i++)
+                {
+                    first[i].OutlineWidth = width;
+                    rendered[i] = first[i].materialForRendering;
+                }
+                for (int i = 0; i < groups; i++)
+                {
+                    second[i].OutlineWidth = width;
+                    if (rendered[i] != second[i].materialForRendering)
+                        throw new System.InvalidOperationException("Animated group failed to share.");
+                }
+            }
+            for (int i = 0; i < 32; i++) Apply(2 + i % 3);
+            var materials = new HashSet<Material>();
+            for (int i = 0; i < 12; i++)
+            {
+                Apply(2 + i % 3);
+                foreach (var material in rendered) materials.Add(material);
+            }
+            Assert.That(materials.Count, Is.LessThanOrEqualTo(2 * groups), "Animated groups should reuse their render states.");
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 100; i++) Apply(2 + i % 3);
+            long allocated = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.That(allocated, Is.Zero, "Warmed-up material sharing should not allocate each style update.");
+        }
+        [Test]
         public void Layers_MigrateOldFieldsAndKeepCompatibilityRolesAfterReorderUndoAndSerialization()
         {
             SdfImage image = CreateImage("Layer migration");

@@ -9,7 +9,7 @@ namespace SDFUI.Editor
     /// <summary>Creates self-contained sample assets without changing the open scene.</summary>
     public static class SdfDemo
     {
-        [MenuItem("Tools/SDF Image/Create Demo Prefab")]
+        [MenuItem("Tools/SDF Outline/Create Demo Prefab")]
         public static void Create()
         {
             string path = CreateAt("Assets/SDFImageDemo");
@@ -27,7 +27,7 @@ namespace SDFUI.Editor
             var panel = CreateSprite(folder, "RoundedPanel", 1);
             var ring = CreateSprite(folder, "Ring", 2);
             var previewScene = EditorSceneManager.NewPreviewScene();
-            var root = new GameObject("SDF Image Demo", typeof(RectTransform), typeof(Canvas),
+            var root = new GameObject("SDF Outline Demo", typeof(RectTransform), typeof(Canvas),
                 typeof(UnityEngine.UI.CanvasScaler));
             root.hideFlags = HideFlags.HideAndDontSave;
             SceneManager.MoveGameObjectToScene(root, previewScene);
