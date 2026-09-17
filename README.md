@@ -1,8 +1,40 @@
-# SDF Image
+# SDF Outline
 
 Outlines and shadows for **Unity 6 / uGUI (Canvas)** sprites and TextMeshPro labels. This standalone library uses uGUI 2.0 and its bundled TextMeshPro.
 
-## Quick start
+## Contents
+
+- [Install and update](#install-and-update)
+- [SDF Image quick start](#sdf-image-quick-start)
+- [SDF Text quick start](#sdf-text-quick-start)
+- [Sprite import and bake settings](#textures-embedded-in-the-source-sprite)
+- [Image rendering and limitations](#image-rendering)
+- [Performance](#performance)
+- [Image API](#api)
+- [Troubleshooting](#troubleshooting)
+- [Demo and testing](#demo-and-testing)
+
+## Install and update
+
+In Package Manager, choose **Install package from Git URL** and enter:
+
+```text
+https://github.com/phucnguyen752/sdf-image.git#upm
+```
+
+This URL follows the `upm` branch. After each release, select **SDF Outline** (or **SDF Image** before updating an older version) in Package Manager and click **Update**; keep the same URL and let Package Manager update the version. If you installed a tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
+
+SDF Outline includes the **SDF Image** and **SDF Text** components. The package ID (`com.sdfimage.ugui`) and installation URL remain unchanged after the library rename.
+
+To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.9.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
+
+The `upm` branch and version tags contain the `com.sdfimage.ugui` package at the repository root; no `?path=` is needed. The `main` branch contains the full Unity project, with the library in `Assets/SDFImage`. Keep `#upm` in the URL because the default `main` branch does not have a package at its root.
+
+You can also copy `Assets/SDFImage` with its `.meta` files into a Unity 6 project with uGUI 2.0, or keep a copy outside Assets and use Package Manager → Add package from disk with `package.json`. Keep only one installation. Source textures must be in Assets to save settings and import attached data. Shaders in Resources are included in builds. See [Publishing.md](Documentation~/Publishing.md) for the release workflow.
+
+Namespaces and assemblies use `SDFUI`, `SDFUI.Editor` and `SDFUI.Tests.Editor`. When updating from version 0.2, update namespaces in your code and the package ID in the manifest; preserve script `.meta` files so existing components retain their identities. Move source settings and baked-data references together with the library. The component icon is a 64×64 PNG exported from the [source SVG](Documentation~/SdfImage.svg).
+
+## SDF Image quick start
 
 1. Create **GameObject → UI → SDF Image**. It uses a single `SdfImage` component derived from `UnityEngine.UI.Image`.
 2. Assign the original sprite to **Source Image** on this component.
@@ -22,7 +54,7 @@ All three examples use **Intensity 0.5** and **Opacity 1**; the outline follows 
 
 The legacy `SdfAutoBake` component is retained so older prefabs still load. Image adopts its saved source; **Remove Legacy Auto Bake** in the Inspector removes the redundant helper with Undo support. New objects do not need this helper.
 
-## TextMeshPro
+## SDF Text quick start
 
 1. Create **GameObject → UI → SDF Text**. The `SdfText` component derives from `TextMeshProUGUI` and keeps the standard TMP Inspector for content, font, font size, alignment, spacing, auto size and rich text.
 2. Assign a TMP font with an SDF atlas. There is no need to Generate SDF or bake text into sprites.
@@ -31,6 +63,18 @@ The legacy `SdfAutoBake` component is retained so older prefabs still load. Imag
 Use **+** and **−** in **Layers** to add or remove effects, and drag the handles to reorder them. Each layer has its own enable toggle, Position, Color, Width/Spread, Softness and Offset. **Position** offers **Outer**, **Inner**, **Center** and **Underlay**. Inner draws a border inside the glyph edge while leaving the middle of the stroke visible; Center puts half the width on each side. Inner and Center borders and Inner underlays render over the text, while Outer and Normal underlays render below it. Within each group, the top list entry (lowest index) draws in front. **Effects Enabled** controls the whole list and retains its settings when disabled.
 
 ![SDF Text Layers: stacked outlines, an offset shadow and reordered colors rendered in Unity URP](Documentation~/sdf-text-layers-demo.png)
+
+### Text layer positions
+
+| Position / Underlay Type | Shape | Draw group |
+| --- | --- | --- |
+| Outer | Exterior border; glyph interior stays empty | Below text |
+| Inner | Inset border clipped to the original glyph | Above text |
+| Center | Border on both sides of the edge | Above text |
+| Underlay / Normal | Filled silhouette for shadows and glow | Below text |
+| Underlay / Inner | Inner shadow clipped to the original glyph and holes | Above text |
+
+![Text border positions and Normal/Inner underlays, rendered directly in Unity](Documentation~/sdf-text-modes-guide.png)
 
 Outline **Width** must be positive; zero or negative widths hide the border. **Outer** draws only the exterior border, leaving the glyph interior empty. **Underlay** shows an **Underlay Type** dropdown with **Normal** and **Inner**. Normal fills the glyph shape behind the text: positive **Spread** expands it, zero keeps its size, and negative values contract it. Outer and Normal underlays can look alike when opaque text covers their centers. Normal is useful for shadows and glow, especially with an offset.
 
@@ -48,7 +92,7 @@ The material Inspector below **SDF Effects** edits the assigned TMP material pre
 
 ![SDF Text: tight spacing, colored outline and soft glow rendered in Unity URP](Documentation~/sdf-text-demo.png)
 
-These three examples use the same `SdfText` component: outline and shadow behind tightly spaced text, a colored outline on a multiline label, and glow from a shadow with no offset. The image was rendered directly in URP Linear. See the [tight-spacing checks and render report](VALIDATION.md).
+These normal-underlay examples use the same `SdfText` component: outline and shadow behind tightly spaced text, a colored outline on a multiline label, and glow from a shadow with no offset. The image was rendered directly in URP Linear. See the [tight-spacing checks and render report](VALIDATION.md).
 
 For an existing TMP label, create an **SDF Text** label, assign its font, content and layout settings, then update references to the new component. Automatic conversion of existing TMP components is not provided; do not replace the TMP script directly in a scene or prefab.
 
@@ -123,7 +167,7 @@ No separate `.asset`, SDF PNG or baked-image folder is created in Assets. Tempor
 
 The Editor needs a graphics device that supports AsyncGPUReadback. Running with `-nographics` cannot generate new SDF data. The GPU is used only to read the imported image, including its alpha and import settings; the source does not need Read/Write enabled.
 
-## Effects and limitations
+## Image rendering
 
 - **SDF Effects → Layers** is a reorderable list, matching SDF Text: the top entry is in front. Each Image supports up to **16 layers**, with independent enable, color, width/spread, softness and offset. **Effects Enabled** toggles the entire list without losing its settings.
 - Each layer supports **Outer**, **Inner** or **Center** outlines. **Underlay** fills the silhouette behind the sprite for shadows and glow; positive Spread expands it and negative Spread contracts it. Exterior effects stay behind the sprite; inner outlines tint its inner edge.
@@ -138,7 +182,11 @@ Width, softness, offset, blur and spread use **Canvas local units**. Padding and
 
 The field stores signed distances, positive inside the shape. The algorithm calculates the Euclidean distance to the opposite alpha class with a half-pixel correction. Alpha Threshold defines the boundary. Compressed storage normalizes these distances into a linear single-channel texture; the shader decodes them back to source pixels. This is a raster SDF, not vector reconstruction or MSDF; increasing Max Size helps preserve fine details.
 
-Each image uses one quad and one material draw, compositing its layers before applying Graphic/CanvasGroup alpha once. It does not batch with images using other materials. The shader samples the fill once, distance once per visible layer, and color once more for each texture-colored layer. More layers increase fragment work; large offsets and soft effects increase the covered area. Multiple images using the same Sprite share its baked textures, and editing layers does not rebake them. The first 16 list entries are supported; entries beyond this limit are not rendered.
+Each image uses one quad, compositing its layers before applying Graphic/CanvasGroup alpha once. Images with matching baked textures, local drawing rectangle, slice mapping and effect settings share a cached material and can batch together. Position, rotation and Graphic tint/alpha do not require separate materials. Different textures, dimensions/pivots, styles, Canvases, clipping or overlapping order can split batches. This does not pack different sprites into an atlas.
+
+Render materials are shared and read-only; edit the component or its `Layers` and call `RefreshEffects()` after changing list entries. A style change detaches from a shared material without changing other images. Material properties are prepared only when dirty. Animated groups reuse material storage, including native stencil variants. The cache keeps at most one spare per live render state and four stencil variants per entry; spares retain no textures and are released as usage shrinks or the final owner is removed. Static images add no per-frame synchronization callback.
+
+The shader samples the fill once, distance once per visible layer, and color once more for each texture-colored layer. More layers increase fragment work; large offsets and soft effects increase the covered area. Multiple images using the same Sprite share its baked textures, and editing layers does not rebake them. The first 16 list entries are supported; entries beyond this limit are not rendered.
 
 ### Baked texture memory and compression
 
@@ -151,6 +199,12 @@ Disable **Compress Distance** to keep the original, uncompressed **RHalf (2 byte
 For a 400×400 sprite with padding 32 and BC7 color, the compressed distance map uses **128 KiB**, compared with **420.5 KiB** for RHalf. Together with the 464×464 color texture, the two baked textures use approximately **338 KiB of GPU pixel data**, compared with **631 KiB** with RHalf distance storage. These figures exclude the original texture, object overhead and any platform fallback. Editor memory reports can include extra texture data; measure a player build for runtime memory. This change does not optimize TMP font atlases or draw-call batching.
 
 Compression is lossy for the color artwork, including alpha and texture-colored outlines. Select **Compression: None** or **RGBA 32 bit** for exact baked colors; it still releases the CPU copies. RGB-only formats discard alpha, as they do for ordinary sprites. Crunch reduces stored data rather than GPU memory. Color textures receive unused right/top padding as required by the selected block format (or square power-of-two padding for PVRTC), without stretching the image or changing its pivot, borders or native size. Unsupported target GPUs may decompress textures and use more memory; validate your target devices. Lower Maximum Size and keep Padding only as large as your effects require to reduce memory further.
+
+## Performance
+
+In the 0.9.0 desktop benchmark, 100 compatible, non-overlapping images dropped from **100 draws to 1**; four styles used **4**, and one shared stencil Mask used **3** including mask setup/teardown. Animating Width on all 100 images reduced property updates plus the first Canvas cycle from **2.7129 to 1.3416 ms**. Static images already had negligible callback cost.
+
+See [image benchmark, raw data and limits](Documentation~/Performance-0.9.0.md) and [SDF Text versus TMP](Documentation~/Performance-0.8.0.md). Text typically uses two draws for effects on one side, or three on both sides, with one font atlas and compatible ordering. Draw-call reduction does not remove overdraw, texture sampling or effect geometry. Android/iOS device performance has not been measured.
 
 ## API
 
@@ -196,29 +250,26 @@ image.Layers.Add(new SdfImageEffect {
 image.RefreshEffects();
 ```
 
-## Demo, installation and testing
+## Troubleshooting
 
-**Tools → SDF Image → Create Demo Prefab** creates a separate sample in `Assets/SDFImageDemo`, with three source images that have SDF enabled and a prefab demonstrating outlines, shadows, glow, Sliced and RectMask2D. Wait for Ready, then drag the prefab into an empty scene. The command does not modify the open scene.
+| Symptom | What to check |
+| --- | --- |
+| Image has no effects | Generate SDF for the source; enable Effects Enabled and a visible layer; use Simple or Sliced with Fill Center. |
+| Text has no effects | Assign a TMP SDF font; enable Effects Enabled; keep Canvas/Mask/RectMask2D on ancestors. |
+| Effect stops growing or clips | Increase sprite Padding and Distance Range, or regenerate the TMP atlas with sufficient padding. These are separate workflows. |
+| Baked sprite colors differ | Use uncompressed color storage, check Image tint/alpha and layer Intensity. Lossy color compression can shift RGB/alpha. |
+| Inner underlay seems reversed | Its Offset shifts the silhouette that cuts out the shadow; shading appears on the opposite side. |
+| Script-edited layers do not refresh | Call `RefreshEffects()` after list/entry edits. Do not mutate a shared render material. |
+| Matching images do not batch | Check exact textures, size/pivot, slice mapping, effects, masks, Canvas and overlapping order. Different sprites are not atlased together. |
+| New name is missing after installing | Update the package. Versions before 0.9.0 still display SDF Image; the package ID and URL stay the same. |
+
+## Demo and testing
+
+**Tools → SDF Outline → Create Demo Prefab** creates a separate sample in `Assets/SDFImageDemo`, with three source images that have SDF enabled and a prefab demonstrating outlines, shadows, glow, Sliced and RectMask2D. Wait for Ready, then drag the prefab into an empty scene. The command does not modify the open scene.
 
 ![SDF Outline overview: outer, inner and center outlines, shadow, glow, nine-slice and RectMask2D](Documentation~/sdf-outline-demo.png)
 
 For UPM installations, import the **Outline and Shadow Demo** sample through Package Manager to try outlines, shadows, glow, nine-slice and RectMask2D. The `Samples~` folder is not imported automatically when copying the library into Assets.
-
-In Package Manager, choose **Install package from Git URL** and enter:
-
-```text
-https://github.com/phucnguyen752/sdf-image.git#upm
-```
-
-This URL follows the `upm` branch. After each release, select **SDF Image** in Package Manager and click **Update**; keep the same URL and let Package Manager update the version. If you installed a tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
-
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.8.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
-
-The `upm` branch and version tags contain the `com.sdfimage.ugui` package at the repository root; no `?path=` is needed. The `main` branch contains the full Unity project, with the library in `Assets/SDFImage`. Keep `#upm` in the URL because the default `main` branch does not have a package at its root.
-
-You can also copy `Assets/SDFImage` with its `.meta` files into a Unity 6 project with uGUI 2.0, or keep a copy outside Assets and use Package Manager → Add package from disk with `package.json`. Keep only one installation. Source textures must be in Assets to save settings and import attached data. Shaders in Resources are included in builds. See [Publishing.md](Documentation~/Publishing.md) for the release workflow.
-
-Namespaces and assemblies use `SDFUI`, `SDFUI.Editor` and `SDFUI.Tests.Editor`. When updating from version 0.2, update namespaces in your code and the package ID in the manifest; preserve script `.meta` files so existing components retain their identities. Move source settings and baked-data references together with the library. The component icon is a 64×64 PNG exported from the [source SVG](Documentation~/SdfImage.svg).
 
 Run `SDFUI.Tests` in Window → General → Test Runner → EditMode. For UPM installations, add the package to `testables` in the manifest and install Unity Test Framework. `SdfTextTests` requires **Window → TextMeshPro → Import TMP Essential Resources**; text rendering checks are skipped when the sample font or a GPU is unavailable. See [VALIDATION.md](VALIDATION.md) for recorded test results and limitations.
 

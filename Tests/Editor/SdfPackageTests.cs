@@ -33,7 +33,7 @@ namespace SDFUI.Tests
                 var manifest = JsonUtility.FromJson<PackageManifest>(
                     File.ReadAllText(FileUtil.GetPhysicalPath(root + "/package.json")));
                 Assert.That(manifest.name, Is.EqualTo("com.sdfimage.ugui"));
-                Assert.That(manifest.displayName, Is.EqualTo("SDF Image"));
+                Assert.That(manifest.displayName, Is.EqualTo("SDF Outline"));
                 Assert.That(manifest.unity, Is.EqualTo("6000.0"));
                 Assert.That(typeof(SdfImage).Assembly.GetName().Name, Is.EqualTo("SDFUI"));
                 Assert.That(typeof(SdfTextureSettings).Assembly.GetName().Name, Is.EqualTo("SDFUI.Editor"));

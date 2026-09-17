@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 — 2026-09-17
+
+- Rename the library to SDF Outline in Package Manager, documentation and the Tools menu. Preserve the package ID, installation URL, SDF Image/SDF Text components, assemblies and asset GUIDs for existing projects.
+- Share cached SDF Image materials between compatible baked textures, drawing/slice mappings and effect styles. Keep tint/alpha in vertex data, detach changed styles safely and preserve stencil masking.
+- Prepare material properties only when dirty and reuse material storage during group animation. Release shared materials with their last owner and bound spare storage without retaining textures.
+- Refresh the overview and usage guide, regenerate Unity-rendered examples under the SDF Outline name, and illustrate text border positions and Normal/Inner underlays.
+
 ## 0.8.0 — 2026-09-17
 
 - Add Outer, Inner, Center and Underlay positions to SDF Text layers. Inner/Center render over the face; Outer/Normal underlays render behind it. Within each group, the lowest layer index remains in front.
