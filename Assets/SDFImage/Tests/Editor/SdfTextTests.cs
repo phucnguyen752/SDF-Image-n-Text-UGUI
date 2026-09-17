@@ -188,6 +188,7 @@ namespace SDFUI.Tests
             Assert.That(legacy.Softness, Is.EqualTo(1.5f));
             Assert.That(legacy.Color, Is.EqualTo(new Color(0.2f, 0.4f, 0.6f, 0.75f)));
             Assert.That(legacy.Offset, Is.EqualTo(Vector2.zero));
+            Assert.That(legacy.Position, Is.EqualTo(SdfOutlinePosition.Underlay), "Existing layers must retain their filled silhouettes.");
             Assert.That(text.OutlineEnabled, Is.False, "Migration must preserve the legacy outline toggle.");
             Assert.That(text.Layers[1].Enabled, Is.False, "The legacy disabled shadow remains an editable back layer.");
             legacy.Enabled = false;
@@ -398,6 +399,54 @@ namespace SDFUI.Tests
         }
 
         [Test]
+        public void LegacyTextLayersWithoutPosition_PreserveSilhouettesAndSaveNewModes()
+        {
+            string folder = CreateSerializationFolder();
+            GameObject loaded = null;
+            try
+            {
+                SdfText text = CreateText(canvas.transform, "O");
+                text.Layers.Clear();
+                text.Layers.Add(Outline(Color.red, 0, new Vector2(20, 0)));
+                text.Layers.Add(Outline(Color.blue, -3, new Vector2(-20, 0)));
+                string path = folder + "/LegacyLayers.prefab";
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(text.gameObject, path), Is.Not.Null);
+                // Reproduce the released prefab schema, before position and underlay type existed.
+                string yaml = File.ReadAllText(path);
+                string legacy = System.Text.RegularExpressions.Regex.Replace(yaml, @"(?m)^    position: 3\r?\n", "");
+                legacy = System.Text.RegularExpressions.Regex.Replace(legacy, @"(?m)^    underlayType: 0\r?\n", "");
+                Assert.That(legacy, Is.Not.EqualTo(yaml));
+                File.WriteAllText(path, legacy);
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                loaded = PrefabUtility.LoadPrefabContents(path);
+                var reloaded = loaded.GetComponent<SdfText>();
+                Assert.That(reloaded.Layers.Count, Is.EqualTo(2));
+                foreach (var layer in reloaded.Layers)
+                {
+                    Assert.That(layer.Position, Is.EqualTo(SdfOutlinePosition.Underlay));
+                    Assert.That(layer.UnderlayType, Is.EqualTo(SdfTextUnderlayType.Normal));
+                }
+                Assert.That(reloaded.Layers[0].Width, Is.Zero);
+                Assert.That(reloaded.Layers[1].Width, Is.EqualTo(-3));
+                reloaded.Layers[0].Position = SdfOutlinePosition.Inner;
+                reloaded.Layers[0].Width = 2;
+                reloaded.Layers[0].UnderlayType = SdfTextUnderlayType.Normal;
+                reloaded.Layers[1].UnderlayType = SdfTextUnderlayType.Inner;
+                PrefabUtility.SaveAsPrefabAsset(loaded, path);
+                PrefabUtility.UnloadPrefabContents(loaded);
+                loaded = PrefabUtility.LoadPrefabContents(path);
+                Assert.That(loaded.GetComponent<SdfText>().Layers[0].Position, Is.EqualTo(SdfOutlinePosition.Inner));
+                Assert.That(loaded.GetComponent<SdfText>().Layers[0].UnderlayType, Is.EqualTo(SdfTextUnderlayType.Normal));
+                Assert.That(loaded.GetComponent<SdfText>().Layers[1].UnderlayType, Is.EqualTo(SdfTextUnderlayType.Inner));
+            }
+            finally
+            {
+                if (loaded) PrefabUtility.UnloadPrefabContents(loaded);
+                AssetDatabase.DeleteAsset(folder);
+            }
+        }
+
+        [Test]
         public void EmptyOutlineList_RemainsEmptyAfterPrefabSaveAndReload()
         {
             string folder = CreateSerializationFolder();
@@ -525,8 +574,118 @@ namespace SDFUI.Tests
             Assert.That(Render(), Is.EqualTo(face), "The master switch must hide every effect layer.");
         }
 
-        [Test]
-        public void OffsetOutlineLayers_FollowRectMaskAndSourceCanvasGroupIndependently()
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void InnerLayers_PreserveGlyphInteriorsAndKeepListOrderAcrossFonts(bool useFallback, bool underlay)
+        {
+            SdfText text = CreateText(canvas.transform, "AO");
+            text.fontSize = 128;
+            text.characterSpacing = 0;
+            if (useFallback)
+            {
+                TMP_FontAsset primary = CreateFont("A"), fallback = CreateFont("O");
+                primary.fallbackFontAssetTable = new List<TMP_FontAsset> { fallback };
+                text.font = primary;
+            }
+            Color[] face = Render();
+            Assert.That(text.textInfo.materialCount, Is.EqualTo(useFallback ? 2 : 1));
+            var red = Outline(Color.red, underlay ? -3 : 3, Vector2.zero);
+            var blue = Outline(Color.blue, underlay ? -3 : 3, Vector2.zero);
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.green, 8, Vector2.zero));
+            text.Layers.Add(red);
+            text.Layers.Add(blue);
+            text.RefreshEffects();
+            AssertFaceUnchanged(face, Render());
+
+            // Inner borders draw over the face even after an earlier below-text layer.
+            if (underlay) blue.UnderlayType = SdfTextUnderlayType.Inner;
+            else blue.Position = SdfOutlinePosition.Inner;
+            text.RefreshEffects();
+            Color[] singleInner = Render();
+            Assert.That(CountColored(singleInner, Color.blue), Is.GreaterThan(30));
+            if (underlay) red.UnderlayType = SdfTextUnderlayType.Inner;
+            else red.Position = SdfOutlinePosition.Inner;
+            text.RefreshEffects();
+            Color[] redFront = Render();
+            Assert.That(CountColored(redFront, Color.white), Is.GreaterThan(50), "Inner must retain the middle of each stroke.");
+            SaveCapture("tmp-inner-red-front-" + useFallback + ".png", redFront);
+
+            text.Layers.Reverse();
+            text.RefreshEffects();
+            Color[] blueFront = Render();
+            int samples = 0;
+            for (int i = 0; i < face.Length; i++)
+            {
+                if (singleInner[i].b < 0.99f || singleInner[i].r > 0.01f || singleInner[i].g > 0.01f) continue;
+                Assert.That(redFront[i].r, Is.GreaterThan(0.98f));
+                Assert.That(redFront[i].b, Is.LessThan(0.02f));
+                Assert.That(blueFront[i].b, Is.GreaterThan(0.98f));
+                Assert.That(blueFront[i].r, Is.LessThan(0.02f));
+                samples++;
+            }
+            Assert.That(samples, Is.GreaterThan(30));
+            SaveCapture("tmp-inner-blue-front-" + useFallback + ".png", blueFront);
+            blue.Enabled = false;
+            text.RefreshEffects();
+            Assert.That(CountColored(Render(), Color.red), Is.GreaterThan(30));
+            red.Position = SdfOutlinePosition.Underlay;
+            red.UnderlayType = SdfTextUnderlayType.Normal;
+            text.RefreshEffects();
+            AssertFaceUnchanged(face, Render());
+            text.EffectsEnabled = false;
+            Assert.That(Render(), Is.EqualTo(face));
+        }
+
+        [TestCase(SdfOutlinePosition.Outer)]
+        [TestCase(SdfOutlinePosition.Inner)]
+        [TestCase(SdfOutlinePosition.Center)]
+        [TestCase(SdfOutlinePosition.Underlay)]
+        public void OutlinePosition_PlacesTheBandOnTheRequestedSideOfTheGlyph(SdfOutlinePosition position)
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.fontSize = 180;
+            Color[] face = Render();
+            text.Layers.Clear();
+            var layer = new SdfTextEffect { Position = position, Width = 4, Color = Color.red };
+            text.Layers.Add(layer);
+            text.RefreshEffects();
+            Color[] actual = Render();
+            SaveCapture("tmp-position-" + position + ".png", actual);
+            if (position == SdfOutlinePosition.Inner)
+                Assert.That(CountExteriorEffect(face, actual), Is.Zero, "Inner must not expand outside the glyph.");
+            else
+                Assert.That(CountExteriorEffect(face, actual), Is.GreaterThan(50));
+
+            if (position == SdfOutlinePosition.Inner || position == SdfOutlinePosition.Center)
+            {
+                int inside = 0;
+                for (int i = 0; i < face.Length; i++)
+                    if (face[i].a > 0.99f && actual[i].r > 0.98f && actual[i].g < 0.02f) inside++;
+                Assert.That(inside, Is.GreaterThan(50), "The border must reach into the glyph face.");
+                Assert.That(CountColored(actual, Color.white), Is.GreaterThan(100), "A border must leave the stroke center visible.");
+            }
+            else AssertFaceUnchanged(face, actual);
+
+            if (position == SdfOutlinePosition.Inner)
+            {
+                layer.Softness = 4;
+                text.RefreshEffects();
+                Assert.That(CountExteriorEffect(face, Render()), Is.Zero, "Softness must not move Inner outside the glyph.");
+            }
+            if (position != SdfOutlinePosition.Underlay)
+            {
+                layer.Width = 0;
+                text.RefreshEffects();
+                Assert.That(Render(), Is.EqualTo(face), "A zero-width border must be invisible.");
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void OffsetOutlineLayers_FollowRectMaskAndSourceCanvasGroupIndependently(bool center)
         {
             var mask = (RectTransform)NewObject("Offset outline clip", typeof(RectTransform),
                 typeof(UnityEngine.UI.RectMask2D)).transform;
@@ -537,6 +696,7 @@ namespace SDFUI.Tests
             text.Layers.Clear();
             text.Layers.Add(Outline(Color.red, 4, new Vector2(-60, 0)));
             text.Layers.Add(Outline(Color.blue, 4, new Vector2(60, 0)));
+            if (center) text.Layers[1].Position = SdfOutlinePosition.Center;
             text.EffectsEnabled = true;
             text.RefreshEffects();
             Color[] opaque = Render();
@@ -563,6 +723,143 @@ namespace SDFUI.Tests
             SaveCapture("tmp-multi-outline-offset-mask.png", opaque);
             group.alpha = 0;
             Assert.That(CountVisible(Render()), Is.Zero);
+        }
+
+        [TestCase(14f, 8f, false, false, false)]
+        [TestCase(-14f, -8f, true, false, false)]
+        [TestCase(150f, 0f, false, false, false)]
+        [TestCase(0f, 150f, true, false, false)]
+        [TestCase(1000f, -1000f, false, false, false)]
+        [TestCase(14f, 8f, true, true, false)]
+        [TestCase(0f, 0f, false, false, true)]
+        [TestCase(8f, -6f, false, false, true)]
+        [TestCase(-8f, 6f, true, false, true)]
+        [TestCase(1000f, -1000f, false, false, true)]
+        [TestCase(8f, -6f, true, true, true)]
+        public void InnerOffset_IsMaskedByTheOriginalGlyphIncludingHoles(float x, float y, bool transformed, bool fallbackFont, bool underlay)
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.fontSize = 160;
+            if (fallbackFont)
+            {
+                TMP_FontAsset primary = CreateFont("A"), fallback = CreateFont("O");
+                primary.fallbackFontAssetTable = new List<TMP_FontAsset> { fallback };
+                text.font = primary;
+                text.text = "AO";
+                text.fontSize = 100;
+                text.characterSpacing = 0;
+            }
+            if (transformed)
+            {
+                text.rectTransform.localScale = new Vector3(1.1f, 0.85f, 1);
+                text.rectTransform.localRotation = Quaternion.Euler(0, 0, 17);
+                text.fontStyle = FontStyles.Italic | FontStyles.Bold;
+            }
+            text.Layers.Clear();
+            // Keep the reference's TMP atlas padding identical to the tested render.
+            // Enabling effects changes padded italic quads slightly, even without a visible effect.
+            var layer = new SdfTextEffect { Width = -10000, Color = Color.red };
+            text.Layers.Add(layer);
+            text.RefreshEffects();
+            Color[] face = Render();
+            Assert.That(CountColored(face, Color.white), Is.GreaterThan(100));
+            if (fallbackFont) Assert.That(text.textInfo.materialCount, Is.EqualTo(2));
+            layer.Position = underlay ? SdfOutlinePosition.Underlay : SdfOutlinePosition.Inner;
+            layer.UnderlayType = underlay ? SdfTextUnderlayType.Inner : SdfTextUnderlayType.Normal;
+            layer.Width = underlay ? -4 : 4;
+            layer.Softness = 1;
+            layer.Offset = new Vector2(x, y);
+            text.RefreshEffects();
+            Color[] actual = Render();
+            SaveCapture("tmp-inner-masked-offset-" + x + "-" + y + "-underlay-" + underlay + ".png", actual);
+            Assert.That(CountExteriorEffect(face, actual), Is.Zero,
+                "Inner must stay inside the original glyph, including its holes, when Offset moves the border.");
+            if (Mathf.Abs(x) < 20 && Mathf.Abs(y) < 20)
+                Assert.That(CountColored(actual, Color.red), Is.GreaterThan(10), "The mask must keep the part intersecting the glyph.");
+            else if (underlay)
+            {
+                int samples = 0;
+                for (int i = 0; i < face.Length; i++)
+                {
+                    if (face[i].a < 0.999f) continue;
+                    Assert.That(actual[i].r, Is.GreaterThan(0.98f));
+                    Assert.That(actual[i].g, Is.LessThan(0.02f), "A distant shadow must cover the face, without neighboring atlas glyphs cutting holes in it.");
+                    samples++;
+                }
+                Assert.That(samples, Is.GreaterThan(100));
+            }
+            else
+            {
+                Assert.That(CountColored(actual, Color.red), Is.Zero, "Large offsets must not sample neighboring glyphs in the atlas.");
+                AssertFaceUnchanged(face, actual);
+            }
+        }
+
+        [Test]
+        public void UnderlayType_SwitchesBetweenNormalAndInnerWithoutLosingSettings()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.fontSize = 180;
+            Color[] face = Render();
+            var layer = Outline(Color.red, 0, new Vector2(8, 0));
+            text.Layers.Add(layer);
+            text.RefreshEffects();
+            Color[] normal = Render();
+            Assert.That(CountExteriorEffect(face, normal), Is.GreaterThan(100));
+            AssertFaceUnchanged(face, normal);
+
+            layer.UnderlayType = SdfTextUnderlayType.Inner;
+            text.RefreshEffects();
+            Color[] inner = Render();
+            Assert.That(CountColored(inner, Color.red), Is.GreaterThan(100));
+            Assert.That(CountColored(inner, Color.white), Is.GreaterThan(100));
+            SaveCapture("tmp-underlay-inner.png", inner);
+
+            layer.Enabled = false;
+            text.RefreshEffects();
+            Assert.That(Render(), Is.EqualTo(face), "The layer switch must hide this underlay.");
+            Assert.That(layer.Offset, Is.EqualTo(new Vector2(8, 0)));
+            Assert.That(layer.Color, Is.EqualTo(Color.red));
+            layer.UnderlayType = SdfTextUnderlayType.Normal;
+            layer.Enabled = true;
+            text.RefreshEffects();
+            Assert.That(Render(), Is.EqualTo(normal));
+
+            layer.UnderlayType = SdfTextUnderlayType.Inner;
+            layer.Position = SdfOutlinePosition.Inner;
+            layer.Width = 4;
+            text.RefreshEffects();
+            Assert.That(CountColored(Render(), Color.red), Is.GreaterThan(30), "Underlay Type must not change other Positions.");
+        }
+
+        [Test]
+        public void InnerUnderlay_OffsetCastsDirectionalShadowAndSignedSpreadControlsItsSize()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.fontSize = 180;
+            var layer = new SdfTextEffect { UnderlayType = SdfTextUnderlayType.Inner, Color = Color.red, Width = 0, Offset = new Vector2(8, 0) };
+            text.Layers.Add(layer);
+            text.RefreshEffects();
+            Color[] rightOffset = Render();
+            layer.Offset = new Vector2(-8, 0);
+            text.RefreshEffects();
+            Color[] leftOffset = Render();
+            float rightSum = 0, leftSum = 0;
+            int rightCount = 0, leftCount = 0;
+            for (int i = 0; i < rightOffset.Length; i++)
+            {
+                if (rightOffset[i].a > 0.99f && rightOffset[i].g < 0.01f) { rightSum += i % Resolution; rightCount++; }
+                if (leftOffset[i].a > 0.99f && leftOffset[i].g < 0.01f) { leftSum += i % Resolution; leftCount++; }
+            }
+            Assert.That(rightCount, Is.GreaterThan(100));
+            Assert.That(leftCount, Is.GreaterThan(100));
+            Assert.That(rightSum / rightCount, Is.LessThan(leftSum / leftCount - 5), "The inner shadow must fall on the opposite side of the shifted silhouette.");
+            layer.Spread = 4;
+            text.RefreshEffects();
+            int smaller = CountColored(Render(), Color.red);
+            layer.Spread = -4;
+            text.RefreshEffects();
+            Assert.That(CountColored(Render(), Color.red), Is.GreaterThan(smaller + 100));
         }
 
         [Test]
@@ -593,10 +890,14 @@ namespace SDFUI.Tests
                     layers.Add(layer);
             layers.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
             Assert.That(layers.Count, Is.EqualTo(6));
+            var styleColors = new List<Vector4>();
             for (int i = 0; i < layers.Count; i++)
-                Assert.That(layers[i].material.GetColor("_EffectColor"),
-                    Is.EqualTo(i < 2 ? Color.black : i < 4 ? Color.blue : Color.red),
+            {
+                layers[i].canvasRenderer.GetMesh().GetUVs(3, styleColors);
+                Assert.That(styleColors[0],
+                    Is.EqualTo((Vector4)(i < 2 ? Color.black : i < 4 ? Color.blue : Color.red)),
                     "All fallback materials of a rear style must render before the next front style.");
+            }
 
             TMP_SubMeshUI sub = text.GetComponentInChildren<TMP_SubMeshUI>();
             Mesh replacement = Object.Instantiate(sub.canvasRenderer.GetMesh());
@@ -622,11 +923,13 @@ namespace SDFUI.Tests
             finally { text.ClearMesh(); Object.DestroyImmediate(replacement); }
         }
 
-        [Test]
-        public void ChangingTextEmptyingAndDisabling_ClearsEveryEffectLayer()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ChangingTextEmptyingAndDisabling_ClearsEveryEffectLayer(bool inner)
         {
             SdfText text = CreateText(canvas.transform, "AVAVA");
             EnableEffects(text);
+            if (inner) text.Layers[0].Position = SdfOutlinePosition.Inner;
             Assert.That(CountVisible(Render()), Is.GreaterThan(200));
             text.ClearMesh();
             Assert.That(CountVisible(Render()), Is.Zero, "ClearMesh must clear the borrowed effect meshes too.");
@@ -644,12 +947,19 @@ namespace SDFUI.Tests
             Assert.That(CountVisible(Render()), Is.Zero, "Deactivating the source must hide its sibling effects.");
         }
 
-        [TestCase(1)]
-        [TestCase(3)]
-        public void CustomUpdateGeometry_EffectsKeepFollowingTheUploadedFaceMeshAcrossRenderUpdates(int outlineCount)
+        [TestCase(1, false)]
+        [TestCase(3, false)]
+        [TestCase(1, true)]
+        [TestCase(3, true)]
+        public void CustomUpdateGeometry_EffectsKeepFollowingTheUploadedFaceMeshAcrossRenderUpdates(int outlineCount, bool inner)
         {
             SdfText text = CreateText(canvas.transform, "O");
             EnableEffects(text);
+            if (inner)
+            {
+                text.Layers[0].Position = SdfOutlinePosition.Inner;
+                text.Layers[0].Offset = new Vector2(5, 2);
+            }
             for (int i = 1; i < outlineCount; i++) text.Layers.Add(Outline(Color.red, 3, Vector2.zero));
             text.RefreshEffects();
             Render();
@@ -674,9 +984,20 @@ namespace SDFUI.Tests
                     foreach (SdfTextLayer layer in canvas.GetComponentsInChildren<SdfTextLayer>())
                     {
                         if (layer.Owner != text) continue;
-                        // GetMesh exposes a renderer-owned copy, so compare geometry rather than object identity.
-                        CollectionAssert.AreEqual(faceVertices, layer.canvasRenderer.GetMesh().vertices);
-                        matched++;
+                        bool above = layer.transform.parent.GetSiblingIndex() > text.transform.GetSiblingIndex();
+                        var expectedVertices = new List<Vector3>();
+                        for (int i = text.Layers.Count - 1; i >= 0; i--)
+                        {
+                            var effect = text.Layers[i];
+                            bool innerEffect = effect.Position == SdfOutlinePosition.Inner ||
+                                effect.Position == SdfOutlinePosition.Underlay && effect.UnderlayType == SdfTextUnderlayType.Inner;
+                            if ((innerEffect || effect.Position == SdfOutlinePosition.Center) != above) continue;
+                            Vector3 offset = innerEffect ? Vector3.zero : (Vector3)effect.Offset;
+                            foreach (Vector3 vertex in faceVertices) expectedVertices.Add(vertex + offset);
+                            matched++;
+                        }
+                        // Each combined block must follow the replacement mesh, with its authored offset.
+                        CollectionAssert.AreEqual(expectedVertices, layer.canvasRenderer.GetMesh().vertices);
                     }
                     Assert.That(matched, Is.EqualTo(outlineCount + 1));
                 }
@@ -705,9 +1026,11 @@ namespace SDFUI.Tests
                 Assert.That(layer.canvasRenderer.cull, Is.False, "Newly visible effects must uncull in the same rebuild.");
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void AncestorMask_ClipsBothTextAndExpandedEffects(bool stencil)
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(true, true)]
+        public void AncestorMask_ClipsBothTextAndExpandedEffects(bool stencil, bool center)
         {
             var mask = (RectTransform)NewObject("Text Mask", typeof(RectTransform)).transform;
             mask.SetParent(canvas.transform, false);
@@ -721,6 +1044,7 @@ namespace SDFUI.Tests
             SdfText text = CreateText(mask, "AVAVA");
             EnableEffects(text);
             text.OutlineWidth = 1;
+            if (center) text.Layers[0].Position = SdfOutlinePosition.Center;
             text.ShadowEnabled = false;
             Color[] thin = Render();
             text.OutlineWidth = 8;
@@ -838,6 +1162,345 @@ namespace SDFUI.Tests
                 Undo.ClearUndo(preset);
                 AssetDatabase.DeleteAsset(folder);
             }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void IdenticalStyles_ShareMaterialsAndChangingOneLabelDoesNotChangeTheOther(bool stencil)
+        {
+            Transform parent = canvas.transform;
+            if (stencil)
+            {
+                var mask = (RectTransform)NewObject("Shared style mask", typeof(RectTransform),
+                    typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Mask)).transform;
+                mask.SetParent(parent, false);
+                mask.sizeDelta = new Vector2(256, 200);
+                mask.GetComponent<UnityEngine.UI.Mask>().showMaskGraphic = false;
+                parent = mask;
+            }
+            SdfText first = CreateText(parent, "O"), second = CreateText(parent, "O");
+            first.rectTransform.anchoredPosition = new Vector2(-60, 0);
+            second.rectTransform.anchoredPosition = new Vector2(60, 0);
+            foreach (var text in new[] { first, second })
+            {
+                text.fontSize = 80;
+                text.Layers.Clear();
+                text.Layers.Add(Outline(Color.red, 4, new Vector2(2, -1)));
+                text.RefreshEffects();
+            }
+            Color[] before = Render();
+            Material sharedFace = second.canvasRenderer.GetMaterial();
+            SdfTextLayer firstLayer = OnlyEffect(first), secondLayer = OnlyEffect(second);
+            Material sharedEffect = secondLayer.canvasRenderer.GetMaterial();
+            Assert.That(first.canvasRenderer.GetMaterial(), Is.SameAs(sharedFace), "Matching faces must batch across labels.");
+            Assert.That(firstLayer.canvasRenderer.GetMaterial(), Is.SameAs(sharedEffect), "Matching styles must batch, including stencil variants.");
+
+            first.Layers[0].Color = Color.green;
+            first.Layers[0].Width = 9;
+            first.Layers[0].Position = SdfOutlinePosition.Inner;
+            first.RefreshEffects();
+            Color[] changed = Render();
+            Assert.That(firstLayer.canvasRenderer.GetMaterial(), Is.SameAs(sharedEffect), "Different styles must still share a material.");
+            Assert.That(secondLayer.canvasRenderer.GetMaterial(), Is.SameAs(sharedEffect));
+            Assert.That(CountColored(changed, Color.green), Is.GreaterThan(10));
+            for (int i = 0; i < before.Length; i++)
+                if (i % Resolution >= Resolution / 2)
+                    Assert.That(changed[i], Is.EqualTo(before[i]), "Editing one label must not mutate another label's shared style.");
+
+            first.Layers[0].Color = Color.red;
+            first.Layers[0].Width = 4;
+            first.Layers[0].Position = SdfOutlinePosition.Underlay;
+            first.RefreshEffects();
+            Render();
+            Assert.That(firstLayer.canvasRenderer.GetMaterial(), Is.SameAs(sharedEffect), "Restoring a style must rejoin its existing batch.");
+            first.EffectsEnabled = second.EffectsEnabled = false;
+            Render();
+            Assert.That(first.canvasRenderer.GetMaterial(), Is.SameAs(second.canvasRenderer.GetMaterial()), "Disabling effects must keep faces batchable.");
+        }
+
+        [Test]
+        public void SharedMaterials_StayAliveForOtherLabelsAndReleaseAfterTheLastOwner()
+        {
+            SdfText first = CreateText(canvas.transform, "A"), second = CreateText(canvas.transform, "O");
+            foreach (var text in new[] { first, second })
+            {
+                text.Layers.Clear();
+                text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+                text.RefreshEffects();
+            }
+            Render();
+            Material face = first.canvasRenderer.GetMaterial(), effect = OnlyEffect(first).material;
+            Assert.That(second.canvasRenderer.GetMaterial(), Is.SameAs(face));
+            Assert.That(OnlyEffect(second).material, Is.SameAs(effect));
+            Object.DestroyImmediate(first.gameObject);
+            Assert.That(CountVisible(Render()), Is.GreaterThan(100));
+            Assert.That(face && effect, Is.True, "Removing one user must keep shared materials alive.");
+            Object.DestroyImmediate(second.gameObject);
+            Assert.That(face == null && effect == null, Is.True, "Materials must be released with their last user.");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SharedMaterials_FollowSourcePresetAnimationWithoutChangingMaterialIdentity(bool stencil)
+        {
+            var preset = new Material(font.material);
+            try
+            {
+                Transform parent = canvas.transform;
+                if (stencil)
+                {
+                    var mask = (RectTransform)NewObject("Animated preset mask", typeof(RectTransform),
+                        typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.Mask)).transform;
+                    mask.SetParent(parent, false);
+                    mask.sizeDelta = new Vector2(256, 200);
+                    mask.GetComponent<UnityEngine.UI.Mask>().showMaskGraphic = false;
+                    parent = mask;
+                }
+                SdfText first = CreateText(parent, "A"), second = CreateText(parent, "O");
+                foreach (var text in new[] { first, second })
+                {
+                    text.fontSharedMaterial = preset;
+                    text.Layers.Clear();
+                    text.Layers.Add(Outline(Color.red, 3, Vector2.zero));
+                    text.RefreshEffects();
+                }
+                Render();
+                Material face = first.canvasRenderer.GetMaterial(), effect = OnlyEffect(first).canvasRenderer.GetMaterial();
+                preset.SetColor("_FaceColor", new Color(0, 1, 0, 0.7f));
+                preset.SetFloat("_FaceDilate", 0.12f);
+                Render(); // No text rebuild or material-change event, including same-frame edits.
+                Assert.That(first.canvasRenderer.GetMaterial(), Is.SameAs(face));
+                Assert.That(second.canvasRenderer.GetMaterial(), Is.SameAs(face));
+                Assert.That(OnlyEffect(first).canvasRenderer.GetMaterial(), Is.SameAs(effect));
+                Assert.That(effect.GetColor("_FaceColor"), Is.EqualTo(preset.GetColor("_FaceColor")));
+                Assert.That(face.GetColor("_FaceColor"), Is.EqualTo(preset.GetColor("_FaceColor")));
+                Assert.That(effect.GetFloat("_FaceDilate"), Is.EqualTo(0.12f));
+                Assert.That(face.GetFloat("_FaceDilate"), Is.EqualTo(0.12f));
+                Assert.That(effect.GetInt("_Stencil"), Is.EqualTo(stencil ? 1 : 0));
+            }
+            finally { Object.DestroyImmediate(preset); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CachedEffectGeometry_FollowsNativeTmpScaleUpdates(bool inner)
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(new SdfTextEffect { Position = inner ? SdfOutlinePosition.Inner : SdfOutlinePosition.Underlay, Width = 3, Offset = new Vector2(2, 1), Color = Color.red });
+            text.RefreshEffects();
+            Render();
+            text.rectTransform.localScale = Vector3.one * 1.5f;
+            Render();
+            var faceUvs = new List<Vector4>();
+            var effectUvs = new List<Vector4>();
+            text.canvasRenderer.GetMesh().GetUVs(0, faceUvs);
+            OnlyEffect(text).canvasRenderer.GetMesh().GetUVs(0, effectUvs);
+            Assert.That(effectUvs.Count, Is.EqualTo(faceUvs.Count));
+            for (int i = 0; i < faceUvs.Count; i++)
+            {
+                Assert.That(effectUvs[i].x, Is.EqualTo(faceUvs[i].x));
+                Assert.That(effectUvs[i].y, Is.EqualTo(faceUvs[i].y));
+                Assert.That(effectUvs[i].w, Is.EqualTo(faceUvs[i].w), "TMP's UV scale changes outside UpdateGeometry; effects must follow in the same render.");
+            }
+            text.CrossFadeAlpha(0.5f, 0, true);
+            Render();
+            Assert.That(OnlyEffect(text).canvasRenderer.GetColor().a, Is.EqualTo(text.canvasRenderer.GetColor().a));
+        }
+
+        [Test]
+        public void CachedEffectIndices_FollowCustomGeometryWithUnchangedVertexAndIndexCounts()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 3, Vector2.zero));
+            text.RefreshEffects();
+            Render();
+            Mesh replacement = Object.Instantiate(text.canvasRenderer.GetMesh());
+            try
+            {
+                int[] original = replacement.GetIndices(0);
+                for (int update = 0; update < 2; update++)
+                {
+                    Array.Reverse(original);
+                    replacement.SetIndices(original, MeshTopology.Triangles, 0, false);
+                    text.UpdateGeometry(replacement, 0);
+                    Render();
+                    CollectionAssert.AreEqual(original, OnlyEffect(text).canvasRenderer.GetMesh().GetIndices(0));
+                }
+            }
+            finally { text.ClearMesh(); Object.DestroyImmediate(replacement); }
+        }
+
+        [Test]
+        public void CachedPadding_RestoresNativeGeometryAfterTogglingEffectsAndExtraPadding()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.EffectsEnabled = false;
+            Render();
+            Vector3[] original = text.canvasRenderer.GetMesh().vertices;
+            foreach (bool extra in new[] { true, false })
+            {
+                text.EffectsEnabled = true;
+                text.extraPadding = extra;
+                Render();
+                text.EffectsEnabled = false;
+                text.extraPadding = false;
+                text.text = "A";
+                Render();
+                text.text = "O";
+                Render();
+                CollectionAssert.AreEqual(original, text.canvasRenderer.GetMesh().vertices,
+                    "Cached padding must restore native geometry, without retaining the expanded effect border.");
+            }
+        }
+
+        [Test]
+        public void SingleAtlas_CombinesLayersPerSideAndClearsUnusedRenderers()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 3, Vector2.zero));
+            text.Layers.Add(Outline(Color.blue, 6, new Vector2(2, -2)));
+            text.RefreshEffects();
+            Render();
+            AssertActiveEffects(text, 1, 2);
+            text.Layers[0].Position = SdfOutlinePosition.Inner;
+            text.RefreshEffects();
+            Render();
+            AssertActiveEffects(text, 2, 2);
+            text.Layers.RemoveAt(1);
+            text.RefreshEffects();
+            Render();
+            AssertActiveEffects(text, 1, 1);
+        }
+
+        private void AssertActiveEffects(SdfText text, int expectedRenderers, int expectedCopies)
+        {
+            int renderers = 0, copies = 0;
+            foreach (var layer in canvas.GetComponentsInChildren<SdfTextLayer>())
+            {
+                Mesh mesh = layer.canvasRenderer.GetMesh();
+                if (layer.Owner != text || !mesh || mesh.vertexCount == 0) continue;
+                renderers++;
+                copies += mesh.vertexCount / text.canvasRenderer.GetMesh().vertexCount;
+            }
+            Assert.That(renderers, Is.EqualTo(expectedRenderers));
+            Assert.That(copies, Is.EqualTo(expectedCopies), "Combining renderers must keep exactly one geometry block per effect.");
+        }
+
+        [Test]
+        public void IdleFallbackFace_FollowsSourceMaterialAnimationWithoutAnExplicitRefresh()
+        {
+            TMP_FontAsset primary = CreateFont("A"), fallback = CreateFont("O");
+            primary.fallbackFontAssetTable = new List<TMP_FontAsset> { fallback };
+            SdfText text = CreateText(canvas.transform, "AO");
+            text.font = primary;
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+            text.RefreshEffects();
+            Render();
+            TMP_SubMeshUI sub = text.GetComponentInChildren<TMP_SubMeshUI>();
+            Assert.That(sub, Is.Not.Null);
+            Material face = sub.canvasRenderer.GetMaterial();
+            sub.sharedMaterial.SetColor("_FaceColor", Color.green);
+            Render();
+            Assert.That(sub.canvasRenderer.GetMaterial(), Is.SameAs(face));
+            Assert.That(face.GetColor("_FaceColor"), Is.EqualTo(Color.green));
+            foreach (var layer in canvas.GetComponentsInChildren<SdfTextLayer>())
+                if (layer.Owner == text && layer.mainTexture == sub.sharedMaterial.mainTexture)
+                    Assert.That(layer.canvasRenderer.GetMaterial().GetColor("_FaceColor"), Is.EqualTo(Color.green));
+        }
+
+        [Test]
+        public void IdleText_FollowsTransformAndRendererFadeWithoutAnExplicitRefresh()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, new Vector2(2, -3)));
+            text.RefreshEffects();
+            Render();
+            Render();
+            text.rectTransform.anchoredPosition = new Vector2(31, -12);
+            text.rectTransform.localRotation = Quaternion.Euler(0, 0, 13);
+            Color[] automatic = Render();
+            text.RefreshEffects();
+            CollectionAssert.AreEqual(automatic, Render(), "Transform changes must reach the effect before rendering.");
+            text.CrossFadeAlpha(0.35f, 0, true);
+            Render();
+            Assert.That(OnlyEffect(text).canvasRenderer.GetColor().a, Is.EqualTo(0.35f).Within(0.0001f));
+        }
+
+        [Test]
+        public void IdleText_FollowsAddedChangedAndRemovedCanvasGroup()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+            text.RefreshEffects();
+            Color[] opaque = Render();
+            var group = text.gameObject.AddComponent<CanvasGroup>();
+            foreach (float alpha in new[] { 0.4f, 0.7f })
+            {
+                group.alpha = alpha;
+                Color[] automatic = Render();
+                text.RefreshEffects();
+                CollectionAssert.AreEqual(automatic, Render(), "A CanvasGroup changed during idle must propagate without RefreshEffects.");
+            }
+            Object.DestroyImmediate(group);
+            CollectionAssert.AreEqual(opaque, Render(), "Removing the source CanvasGroup must restore effect opacity.");
+        }
+
+        [Test]
+        public void IdleText_RepairsSiblingOrderWhenAnotherGraphicMovesBetweenEffectAndFace()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+            text.RefreshEffects();
+            Render();
+            var other = NewObject("Reordered sibling", typeof(RectTransform));
+            other.transform.SetParent(canvas.transform, false);
+            other.transform.SetSiblingIndex(text.transform.GetSiblingIndex());
+            Render();
+            Assert.That(OnlyEffect(text).transform.parent.GetSiblingIndex(), Is.EqualTo(text.transform.GetSiblingIndex() - 1));
+        }
+
+        [Test]
+        public void IdleText_DisablesEffectsWhenRectMaskIsAddedDirectlyToText()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+            text.RefreshEffects();
+            Assert.That(CountColored(Render(), Color.red), Is.GreaterThan(20));
+            var mask = text.gameObject.AddComponent<UnityEngine.UI.RectMask2D>();
+            Assert.That(CountColored(Render(), Color.red), Is.Zero);
+            Object.DestroyImmediate(mask);
+            Assert.That(CountColored(Render(), Color.red), Is.GreaterThan(20));
+        }
+
+        [Test]
+        public void IdleText_RecoversAfterSharedMaterialCacheReset()
+        {
+            SdfText text = CreateText(canvas.transform, "O");
+            text.Layers.Clear();
+            text.Layers.Add(Outline(Color.red, 4, Vector2.zero));
+            text.RefreshEffects();
+            Color[] before = Render();
+            Type cache = typeof(SdfText).Assembly.GetType("SDFUI.SdfTextMaterials");
+            cache.GetMethod("Reset", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+            CollectionAssert.AreEqual(before, Render(), "Surviving labels must reacquire render materials after a cache reset.");
+            Assert.That(text.canvasRenderer.GetMaterial(), Is.Not.Null);
+            Assert.That(OnlyEffect(text).canvasRenderer.GetMaterial(), Is.Not.Null);
+        }
+
+        private SdfTextLayer OnlyEffect(SdfText owner)
+        {
+            foreach (var layer in canvas.GetComponentsInChildren<SdfTextLayer>())
+                if (layer.Owner == owner) return layer;
+            Assert.Fail("Expected an effect renderer for the label.");
+            return null;
         }
 
         [Test]

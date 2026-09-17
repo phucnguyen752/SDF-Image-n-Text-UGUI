@@ -28,17 +28,21 @@ The legacy `SdfAutoBake` component is retained so older prefabs still load. Imag
 2. Assign a TMP font with an SDF atlas. There is no need to Generate SDF or bake text into sprites.
 3. Enable **Effects Enabled** in **SDF Effects** below the Inspector. Spread, softness and offset use Canvas local units.
 
-Use **+** and **−** in **Layers** to add or remove effects, and drag the handles to reorder them. The top layer is in front, closest to the text; the last layer is at the back. Each layer has its own enable toggle, Color, Spread, Softness and Offset. **Effects Enabled** controls the whole list and retains its settings when disabled.
+Use **+** and **−** in **Layers** to add or remove effects, and drag the handles to reorder them. Each layer has its own enable toggle, Position, Color, Width/Spread, Softness and Offset. **Position** offers **Outer**, **Inner**, **Center** and **Underlay**. Inner draws a border inside the glyph edge while leaving the middle of the stroke visible; Center puts half the width on each side. Inner and Center borders and Inner underlays render over the text, while Outer and Normal underlays render below it. Within each group, the top list entry (lowest index) draws in front. **Effects Enabled** controls the whole list and retains its settings when disabled.
 
 ![SDF Text Layers: stacked outlines, an offset shadow and reordered colors rendered in Unity URP](Documentation~/sdf-text-layers-demo.png)
 
-Positive **Spread** expands the glyph shape, zero keeps its size, and negative values contract it. **Softness** blurs the edge. Use a dark layer with an offset for a shadow, or a bright soft layer with zero offset for glow. Outlines, shadows and glow share the same list and follow its order.
+Outline **Width** must be positive; zero or negative widths hide the border. **Outer** draws only the exterior border, leaving the glyph interior empty. **Underlay** shows an **Underlay Type** dropdown with **Normal** and **Inner**. Normal fills the glyph shape behind the text: positive **Spread** expands it, zero keeps its size, and negative values contract it. Outer and Normal underlays can look alike when opaque text covers their centers. Normal is useful for shadows and glow, especially with an offset.
+
+**Underlay Type → Inner** casts a shadow inside the original glyph. Offset shifts the silhouette that cuts out the shadow, so shading appears on the opposite side; Softness blurs it. Positive Spread expands that silhouette and reduces the inner shadow; negative Spread grows the shadow. This differs from **Position → Inner**, which draws an inset border. Existing and new layers default to Normal. Use the layer checkbox to disable either type.
+
+**Softness** blurs the effect edge. Both Inner borders and Inner underlays are masked by the original glyph, including its holes: Offset moves the pattern inside that fixed mask, and Softness cannot extend it outside the text. Other effects move their entire shape with Offset.
 
 **Softness 0** still uses antialiasing. Enlarged contours from low-resolution glyphs can remain rough; regenerate the font at a higher sampling size, with enough atlas space and padding for large labels and thick effects. Softness adds blur but cannot restore missing glyph detail.
 
 Reordering requires a single selected label. You can edit shared layer settings across multiple labels, and add or remove layers together when their layer counts match.
 
-All effect layers are drawn behind all glyph faces. A later character's outline cannot cover its neighbour's face, even with tight spacing, fallback fonts or multiple materials. The component uses TMP's current mesh and font atlas and updates automatically when content, layout or fonts change at runtime. TMP's built-in Outline/Underlay/Glow effects are disabled on separate render materials; source fonts and materials remain unchanged.
+Existing layers load as **Underlay / Normal** to preserve their filled outline, shadow and glow rendering, including signed spread. New layers also default to Underlay / Normal; choose Position → Inner to add an inset border. Outer and Normal underlays stay behind all glyph faces, including fallback fonts and multiple materials. The component uses TMP's current mesh and font atlas and updates automatically when content, layout or fonts change at runtime. TMP's built-in Outline/Underlay/Glow effects are disabled on separate render materials; source fonts and materials remain unchanged.
 
 The material Inspector below **SDF Effects** edits the assigned TMP material preset, including Face Color, Softness and Dilate. Changes persist in that material and affect other labels sharing it. Choose a separate material preset for an independent style. Temporary render materials are hidden from the Inspector; use **SDF Effects** for outlines, shadows and glow.
 
@@ -77,16 +81,22 @@ public sealed class ScoreLabel : MonoBehaviour
 }
 ```
 
-`Layers` exposes a mutable `List<SdfTextEffect>`. Each entry has `Enabled`, signed `Width` (shown as Spread in the Inspector), `Softness`, `Color` and `Offset` properties. `Spread` is an alias for `Width`. After adding, removing, reordering or editing entries from code, call `RefreshEffects()`.
+`Layers` exposes a mutable `List<SdfTextEffect>`. Each entry has `Enabled`, `Position` (a `SdfOutlinePosition`, default `Underlay`), `UnderlayType` (a `SdfTextUnderlayType`, default `Normal`), `Width` (shown as Spread for Underlay), `Softness`, `Color` and `Offset` properties. `Spread` is an alias for `Width`. For example, `label.Layers[0].Position = SdfOutlinePosition.Inner` selects an inset border. Set Position to Underlay and UnderlayType to `SdfTextUnderlayType.Inner` for an inner shadow. After adding, removing, reordering or editing entries from code, call `RefreshEffects()`.
 
 Existing outline settings migrate in their current order, followed by the old shadow as the back layer, with its settings and enabled state preserved. New labels start with an enabled outline layer and a disabled shadow layer. The earlier `Outline*` and `Shadow*` properties remain compatibility aliases for their migrated layers, including after reordering; use `Layers` and `EffectsEnabled` for new code.
 
-Unlike the old single-outline component, width zero now renders an unexpanded effect. This also applies to migrated width-zero outlines; disable the layer to hide it.
+Normal underlay spread zero renders an unexpanded effect. This also applies to migrated width-zero outlines; disable the layer to hide it. Inner underlay spread zero can still cast a shadow through Offset and Softness. Outer, Inner and Center borders are hidden at width zero.
 
 - Supports `TextMeshProUGUI` on a Canvas only. 3D `TextMeshPro` and custom font shaders that do not use SDF are not supported.
 - Spread and softness are limited by the font atlas's existing padding and distance range. If an effect stops expanding, regenerate the font atlas with more padding; sprite bake settings do not affect fonts.
 - Supports ancestor Canvases, `Mask`, `RectMask2D` and `CanvasGroup` in the hierarchy. Place `Canvas`, `Mask` and `RectMask2D` on a parent object. Attaching them directly to the text object disables SDF effects.
-- Each active effect layer adds a render layer and material for each font material in use. More layers or fallback fonts increase draw calls, while large effects increase overdraw.
+- Labels share face/effect materials by font preset and stencil state. Effect color, width, softness, position and offset are stored in mesh vertices, so different layer styles can batch together without affecting one another. Render materials are shared and read-only; edit the font preset or `Layers` instead.
+- With one font atlas, all effects on each side of the text merge into one mesh/renderer while preserving whole-layer order. Compatible, non-overlapping labels can typically use two draws (effects on one side plus face), or three with effects both above and below. Different presets, atlases, Canvases, masks, clipping or overlapping draw order can split batches. Multiple font materials retain separate ordered effect graphics across fonts.
+- Effect meshes upload when geometry, TMP's SDF scale or a layer style changes. Native TMP padding and mesh indices are cached until their inputs change. Inner borders and Inner underlays with a nonzero Offset use an extra atlas sample; glyph atlas bounds prevent large offsets from sampling neighboring characters.
+- Unchanged text skips layer enumeration, transform writes and material setup. Lightweight checks follow transform/order, renderer alpha and runtime component changes; TMP/UI dirty callbacks request full synchronization when needed. Source material changes are checked once per shared render material per Canvas cycle, including fallback fonts. Call `RefreshEffects()` after editing `Layers` from a script.
+- See the [0.8.0 performance comparison with TMP](Documentation~/Performance-0.8.0.md) for measured CPU, draw calls and memory tradeoffs.
+- Combining layers reduces draw calls and renderer overhead, but each effect still draws its glyph geometry, so triangle count and overdraw remain. Effect meshes carry extra vertex data, and TexCoord2/TexCoord3 are enabled on the containing Canvas; this increases vertex memory/bandwidth. Profile frequently changing text and target phones rather than treating fewer draws as a guaranteed FPS improvement.
+- Shared material copies refresh when the source preset changes and are released with their last owner. Font material animation, fallback fonts, masks and layer order remain supported; the native TMP face keeps its own render pass.
 
 ## Textures embedded in the source sprite
 
@@ -202,7 +212,7 @@ https://github.com/phucnguyen752/sdf-image.git#upm
 
 This URL follows the `upm` branch. After each release, select **SDF Image** in Package Manager and click **Update**; keep the same URL and let Package Manager update the version. If you installed a tag such as `#0.3.1`, use **Install package from Git URL** once with the `#upm` URL above to switch to this update flow. See [Unity's Git package update instructions](https://docs.unity3d.com/6000.0/Documentation/Manual/upm-ui-update.html).
 
-To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.7.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
+To keep this version, use `https://github.com/phucnguyen752/sdf-image.git#0.8.0`. Clicking **Update** while using this tag will not switch to a newer release tag.
 
 The `upm` branch and version tags contain the `com.sdfimage.ugui` package at the repository root; no `?path=` is needed. The `main` branch contains the full Unity project, with the library in `Assets/SDFImage`. Keep `#upm` in the URL because the default `main` branch does not have a package at its root.
 

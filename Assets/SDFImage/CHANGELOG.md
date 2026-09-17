@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-09-17
+
+- Add Outer, Inner, Center and Underlay positions to SDF Text layers. Inner/Center render over the face; Outer/Normal underlays render behind it. Within each group, the lowest layer index remains in front.
+- Add Normal and Inner underlay types. Inner borders and shadows stay masked to the original glyph, including holes, with offset and softness. Existing layers retain Underlay / Normal behavior.
+- Share cached face/effect materials across compatible labels and encode effect styles in vertices. For a single font material, merge layers into one mesh per side while preserving whole-layer order. Compatible labels can batch into two draws with effects on one side, or three with effects on both sides; atlas, preset, Canvas, mask and overlapping order can split batches.
+- Skip full effect synchronization for unchanged text and watch source materials once per shared material per Canvas cycle. Preserve automatic transform, order, alpha, CanvasGroup, clipping and fallback-material updates. Continue to call RefreshEffects after editing Layers from code.
+- Upload interleaved effect vertices, reuse index buffers and cache native TMP padding. Keep native face effects disabled on render copies without changing source font presets.
+- Add regression coverage for layer modes, glyph masks, shared materials, merged meshes, TMP geometry APIs, idle updates and material-cache recovery. Document measured Windows performance and the remaining mobile validation limits.
+
 ## 0.7.0 — 2026-09-16
 
 - Remove the Ready badge and SDF Settings foldout from the SDF Image component Inspector; keep bake controls in the source texture's SDF Import Settings.

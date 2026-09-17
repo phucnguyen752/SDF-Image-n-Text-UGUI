@@ -10,9 +10,9 @@ Repository: <https://github.com/phucnguyen752/sdf-image>.
 2. Run `SDFUI.Tests` in isolated Built-in and URP projects, including a local UPM installation with `com.sdfimage.ugui` in `testables`. Verify the demo, source attachment/reimport, and player script compilation. Record actual results and remaining limitations; a script compilation does not establish a complete player build.
 3. Commit the reviewed package and project changes on `main`. Keep `Library`, `Temp`, `Logs`, `obj`, and `Build` outputs out of the release, except deliberately copied evidence inside the package documentation. Start the split from a clean, committed checkout.
 
-## Publish 0.7.0
+## Publish 0.8.0
 
-Run these commands from a clean committed checkout in PowerShell after verification. When the working project contains unrelated edits, commit only the reviewed release files and create a detached worktree at that commit for the split. For later releases, replace every `0.7.0` below with the new version.
+Run these commands from a clean committed checkout in PowerShell after verification. When the working project contains unrelated edits, commit only the reviewed release files and create a detached worktree at that commit for the split. For later releases, replace every `0.8.0` below with the new version.
 
 ```powershell
 git fetch origin
@@ -25,11 +25,11 @@ Confirm the package version and root contents before continuing. When `origin/up
 
 ```powershell
 git branch -f upm $packageCommit
-git tag -a 0.7.0 $packageCommit -m "SDF Image 0.7.0"
-git push --atomic origin main upm refs/tags/0.7.0
-git ls-remote origin refs/heads/main refs/heads/upm refs/tags/0.7.0 'refs/tags/0.7.0^{}'
+git tag -a 0.8.0 $packageCommit -m "SDF Image 0.8.0"
+git push --atomic origin main upm refs/tags/0.8.0
+git ls-remote origin refs/heads/main refs/heads/upm refs/tags/0.8.0 'refs/tags/0.8.0^{}'
 ```
 
-The remote `upm` hash and peeled tag hash (`0.7.0^{}`) must equal `$packageCommit`. Never move an existing release tag; use a new version for changes after publication.
+The remote `upm` hash and peeled tag hash (`0.8.0^{}`) must equal `$packageCommit`. Never move an existing release tag; use a new version for changes after publication.
 
-Finally, install `https://github.com/phucnguyen752/sdf-image.git#0.7.0` in a clean Unity 6 project, confirm package identity and sample import, and create the GitHub release from the annotated tag using the verified release notes. Attach a package archive built from that same commit and verify its uploaded digest.
+Finally, install `https://github.com/phucnguyen752/sdf-image.git#0.8.0` in a clean Unity 6 project, confirm package identity and sample import, and create the GitHub release from the annotated tag using the verified release notes. Attach a package archive built from that same commit and verify its uploaded digest.

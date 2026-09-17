@@ -9,6 +9,7 @@ namespace SDFUI
     {
         public SdfText Owner { get; set; }
         private Material source, stencil, instance;
+        private SdfTextMaterials.Entry materialEntry;
 
         public Material GetModifiedMaterial(Material baseMaterial)
         {
@@ -17,14 +18,15 @@ namespace SDFUI
             var subMesh = GetComponent<TMPro.TMP_SubMeshUI>();
             source = subMesh ? subMesh.sharedMaterial : baseMaterial;
             stencil = baseMaterial;
-            return SdfText.FaceOnly(source, ref instance, stencil);
+            return SdfText.FaceOnly(source, ref instance, ref materialEntry, stencil);
         }
 
-        private void LateUpdate()
+        private void OnDisable()
         {
-            if (source && instance) SdfText.FaceOnly(source, ref instance, stencil);
+            SdfTextMaterials.Release(ref materialEntry);
+            source = stencil = instance = null;
         }
 
-        private void OnDestroy() => SdfText.Release(instance);
+        private void OnDestroy() => SdfTextMaterials.Release(ref materialEntry);
     }
 }

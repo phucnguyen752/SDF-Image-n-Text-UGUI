@@ -1,5 +1,25 @@
 # Validation
 
+## 0.8.0 — text layer modes, batching and idle CPU (2026-09-17)
+
+Validated the release sources through a local UPM installation in the isolated Unity **6000.0.83f1** fixture. The development scene, project settings and unrelated assets are excluded from this package release.
+
+| Check | Result |
+| --- | --- |
+| Built-in pipeline, Gamma | **154 / 154 EditMode tests passed**, zero skipped, 35.703 s |
+| URP 17.0.4, Linear | **154 / 154 EditMode tests passed**, zero skipped, 35.390 s |
+| Android Image/Text shader bundle, Vulkan and OpenGL ES 3 | **Passed**, strict shader bundle build |
+| Windows Development Player, Mono / D3D11 | **Built and ran the complete performance benchmark**, no runtime exceptions |
+| Render comparison before/after idle optimization | **All 10 benchmark captures have identical SHA-256 hashes** |
+
+The full suite includes 72 SDF Text cases covering Outer/Inner/Center, Normal/Inner underlays, original-glyph masking and holes, offsets, alpha, whole-layer ordering across fallback fonts, shared materials, merged effect meshes, style changes, native TMP geometry APIs, clipping and cache recovery. Idle regressions exercise transforms/fades, added/removed CanvasGroups and masks, sibling ordering and fallback-material animation. Existing image/import/bake/sample and serialized identity tests remain enabled.
+
+In the Windows benchmark with 100 labels and three Normal layers, static CPU decreased from **0.4124 to 0.0452 ms** per first Canvas cycle. Four stacked TMP labels with shared presets measured **0.0194 ms / 4 draws**, versus **0.0452 ms / 2 draws** for SDF Text. One TMP with built-in effects measured **0.0075 ms / 1 draw**. These are Canvas callback timings, not whole-frame/GPU measurements. Extra effect vertices still cost memory and bandwidth; layer triangle count and overdraw remain. See the [performance report and raw data](Documentation~/Performance-0.8.0.md).
+
+Reports: [Built-in Gamma](Documentation~/Tests-0.8.0-Builtin.xml), [URP Linear](Documentation~/Tests-0.8.0-URP-Linear.xml). Android shader and Windows build/player logs remain under the development project's ignored `Build` directory. The player benchmark exercised the same runtime/shader sources before the metadata-only version bump to 0.8.0; both full test suites ran after that bump. Git may normalize XML line endings without changing report content.
+
+No complete APK/iOS player build, Android/iOS device run, mobile GPU timing, thermal or battery profile was performed. Automated tests do not establish mouse-driven Inspector interaction coverage.
+
 ## 0.7.0 — image layers, compressed bakes and import controls (2026-09-16)
 
 Validated the package in an isolated local UPM fixture using Unity **6000.0.83f1**. The original development scene and unrelated project changes were excluded from the release.

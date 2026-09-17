@@ -52,7 +52,8 @@ namespace SDFUI.Editor
             serializedObject.Update();
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("SDF Effects", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Draws all effect layers behind the whole label. " +
+            EditorGUILayout.HelpBox("Inner and Center borders and Inner underlays draw over the text; Outer and Normal underlays draw below it. " +
+                "Within each side, layers at the top of the list draw in front. " +
                 "Sizes use local Canvas units; font atlas padding limits spread and softness.", MessageType.None);
 
             bool supported = true;
@@ -121,7 +122,9 @@ namespace SDFUI.Editor
         private float LayerHeight(int index)
         {
             var element = layers.GetArrayElementAtIndex(index);
-            return 4 + 4 * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing)
+            var position = element.FindPropertyRelative("position");
+            bool underlay = position.hasMultipleDifferentValues || position.intValue == (int)SdfOutlinePosition.Underlay;
+            return 4 + (underlay ? 6 : 5) * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing)
                 + EditorGUI.GetPropertyHeight(element.FindPropertyRelative("offset"), new GUIContent("Offset"));
         }
 
@@ -130,19 +133,25 @@ namespace SDFUI.Editor
             var element = layers.GetArrayElementAtIndex(index);
             var enabled = element.FindPropertyRelative("enabled");
             string title = $"Layer {index + 1}";
-            if (index == 0) title += " (Front)";
-            else if (!layerCount.hasMultipleDifferentValues && index == layers.arraySize - 1) title += " (Back)";
 
             EditorGUI.BeginProperty(rect, GUIContent.none, element);
             rect.y += 2;
             DrawLayerField(ref rect, enabled, title);
             using (new EditorGUI.DisabledScope(!enabled.boolValue && !enabled.hasMultipleDifferentValues))
             {
+                var position = element.FindPropertyRelative("position");
+                DrawLayerField(ref rect, position, "Position",
+                    "Place the border outside, inside or across the glyph edge. Underlay fills the shape for shadows and glow.");
+                if (position.hasMultipleDifferentValues || position.intValue == (int)SdfOutlinePosition.Underlay)
+                    DrawLayerField(ref rect, element.FindPropertyRelative("underlayType"), "Underlay Type",
+                        "Normal draws behind the text. Inner casts a shadow inside the original glyph mask.");
                 DrawLayerField(ref rect, element.FindPropertyRelative("color"), "Color");
-                DrawLayerField(ref rect, element.FindPropertyRelative("width"), "Spread",
-                    "Positive expands the glyph shape, zero preserves its size, and negative contracts it.");
+                bool underlay = !position.hasMultipleDifferentValues && position.intValue == (int)SdfOutlinePosition.Underlay;
+                DrawLayerField(ref rect, element.FindPropertyRelative("width"), underlay ? "Spread" : "Width",
+                    "Outline width uses positive values. Underlay spread expands or contracts the silhouette; positive spread reduces an Inner shadow, negative spread grows it.");
                 DrawLayerField(ref rect, element.FindPropertyRelative("softness"), "Softness");
-                DrawLayerField(ref rect, element.FindPropertyRelative("offset"), "Offset");
+                DrawLayerField(ref rect, element.FindPropertyRelative("offset"), "Offset",
+                    "Moves the effect. Inner borders and Inner underlays stay clipped to the original glyph, including its holes.");
             }
             EditorGUI.EndProperty();
         }
@@ -162,6 +171,8 @@ namespace SDFUI.Editor
             var element = layers.GetArrayElementAtIndex(index);
             var defaults = new SdfTextEffect();
             element.FindPropertyRelative("enabled").boolValue = defaults.Enabled;
+            element.FindPropertyRelative("position").intValue = (int)defaults.Position;
+            element.FindPropertyRelative("underlayType").intValue = (int)defaults.UnderlayType;
             element.FindPropertyRelative("color").colorValue = defaults.Color;
             element.FindPropertyRelative("width").floatValue = defaults.Width;
             element.FindPropertyRelative("softness").floatValue = defaults.Softness;
